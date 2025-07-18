@@ -1,4 +1,4 @@
-# agents/base_agent.py (Ollamaの仕様に完全に準拠した最終版)
+# agents/base_agent.py (Web検索を禁止する最終完成版)
 import logging
 import os
 from openai import AsyncOpenAI
@@ -23,18 +23,12 @@ class BaseAgent:
         try:
             logging.info(f"LLM呼び出し中... Model: {self.model}")
             
-            # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-            # ★★★ ここが最重要の修正点 ★★★
-            #
-            # Ollamaが対応していない 'format' 引数を完全に削除。
-            # これでAPI呼び出しは確実に成功する。
             response = await self.llm_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0.1
+                temperature=0.0, # 創造性をゼロにし、指示に絶対服従させる
+                tool_choice="none" # ★ GrokやOllamaに「ツールを使うな」と厳命する
             )
-            #
-            # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
             content = response.choices[0].message.content
             return content.strip() if content else ""
