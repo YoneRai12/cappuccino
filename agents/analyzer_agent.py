@@ -1,15 +1,16 @@
+# agents/analyzer_agent.py (最終・確定版)
 import asyncio
-from typing import Any, Dict, List
+import logging
+from typing import Dict, Any, List
 
-class AnalyzerAgent:
-    """Agent that aggregates execution results."""
+from .base_agent import BaseAgent
 
+class AnalyzerAgent(BaseAgent):
     async def analyze(self, result_queue: asyncio.Queue) -> List[Dict[str, Any]]:
-        """Collect results from ``result_queue`` until ``None`` is received."""
         results = []
-        while True:
-            item = await result_queue.get()
-            if item is None:
-                break
-            results.append(item)
-        return results
+        while not result_queue.empty():
+            results.append(await result_queue.get()); result_queue.task_done()
+        logging.info(f"分析する結果: {results}")
+        if not results: return [{"result": "タスクは実行されましたが、結果はありませんでした。"}]
+        final_response = "\n".join([str(r.get("result", "")) for r in results])
+        return [{"result": final_response}]
