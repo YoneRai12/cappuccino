@@ -1,4 +1,4 @@
-# agents/planner_agent.py (バグ修正・最終版)
+# agents/planner_agent.py (矛盾を解消した最終完成版)
 import asyncio
 import logging
 import json
@@ -8,43 +8,40 @@ from typing import List, Dict, Any
 from .base_agent import BaseAgent
 
 class PlannerAgent(BaseAgent):
-    """
-    ユーザーの要求を分析し、タスク計画を生成するエージェント。
-    Llama 3.1のようなモデルからの非構造的な応答にも対応できるように修正済み。
-    """
     async def plan(self, user_query: str, plan_queue: asyncio.Queue, tools_schema: List[Dict[str, Any]]):
         try:
             tools_json = json.dumps(tools_schema, indent=2, ensure_ascii=False)
-            prompt = (f"あなたは、ユーザーの要求を分析し、実行可能なタスク計画をJSON形式で出力する計画AIです。\n"
-                      f"利用可能なツール:\n{tools_json}\n\n"
-                      f"ユーザーの要求: \"{user_query}\"\n\n"
-                      f"思考プロセスは出力せず、JSON形式の計画のみを出力してください。各ステップには'task'と'dependencies'を含めてください。")
+            prompt = (
+                f"You are an AI assistant that converts user requests into a JSON array of tasks.\n"
+                f"### Available Tools:\n{tools_json}\n\n"
+                f"### User Request:\n\"{user_query}\"\n\n"
+                f"### INSTRUCTIONS:\n"
+                f"- Create a plan as a JSON array to fulfill the user request.\n"
+                f"- Each task object in the array MUST contain a key named 'task' which specifies the tool to use.\n"
+                f"- Your response MUST only be the raw JSON array, with no other text."
+            )
             
+            # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+            # ★★★ ここが最重要の修正点です ★★★
+            #
+            # 存在しない 'use_json_format' 引数を削除。
+            # これで BaseAgent との連携が正しく行われる。
             raw_response = await self.call_llm(prompt)
-            logging.info(f"LLMからの生応答: {raw_response}")
-
-            # --- ここからが重要な変更点 (バグ修正) ---
+            #
+            # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
             
-            # 1. LLMの応答からJSON部分だけを正規表現で安全に抽出する
-            match = re.search(r'```json\s*([\s\S]*?)\s*```', raw_response)
-            if match:
-                json_str = match.group(1)
-            else:
-                # ```json ``` が見つからない場合、応答全体がJSONであると仮定する
-                json_str = raw_response
+            logging.info(f"LLMからの生計画応答: {raw_response}")
+            
+            match = re.search(r'\[.*\]', raw_response, re.DOTALL)
+            if not match: raise ValueError("Response does not contain a valid JSON array.")
 
-            # 2. 抽出した文字列をJSONとして解析
-            plan = json.loads(json_str)
+            plan = json.loads(match.group(0))
             logging.info(f"生成された計画: {plan}")
-            for task in plan:
-                await plan_queue.put(task)
-            
-            # --- ここまでが重要な変更点 ---
-
-        except json.JSONDecodeError:
-            logging.warning(f"計画JSONの解析に失敗。応答を直接の回答タスクとして扱います。応答: {raw_response}")
-            await plan_queue.put({"task": raw_response, "dependencies": []})
+            for task in plan: await plan_queue.put(task)
 
         except Exception as e:
-            logging.error(f"計画作成時に予期せぬエラーが発生: {e}", exc_info=True)
-            await plan_queue.put({"task": user_query, "dependencies": []})
+            logging.error(f"計画作成エラー: {e}", exc_info=True)
+            await plan_queue.put({
+                "task": "respond_to_user", "dependencies": [],
+                "parameters": {"text": f"計画の作成に失敗しました。"}
+            })
