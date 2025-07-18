@@ -1,6 +1,5 @@
-# agents/analyzer_agent.py (自然な日本語生成に特化した最終版)
+# agents/analyzer_agent.py (修正版)
 import logging
-import json
 from typing import List, Dict, Any
 
 from .base_agent import BaseAgent
@@ -12,8 +11,19 @@ class AnalyzerAgent(BaseAgent):
         if not results:
             return "タスクは実行されましたが、報告すべき結果はありませんでした。"
 
-        # 実行結果を分かりやすく整形
-        formatted_results = "\n".join([f"- タスク結果: {res.get('result', 'N/A')}" for res in results])
+        # 画像生成結果をまず優先チェック
+        for res in results:
+            result_str = res.get('result', '') or res.get('output', '')
+            if isinstance(result_str, str):
+                if "画像を生成しました。パス:" in result_str or "画像生成成功" in result_str:
+                    # 画像生成成功時の返答
+                    return f"画像の生成が完了しました！ファイルはこちらです：{result_str.split('パス:')[-1].strip()}"
+                if "エラー" in result_str or "失敗" in result_str:
+                    # 失敗を検知したら丁寧に伝える
+                    return "申し訳ありません、画像生成に問題が発生しました。もう一度試していただけますか？"
+
+        # 画像生成に関する結果が無い場合、LLMにより自然な返答を生成
+        formatted_results = "\n".join([f"- タスク結果: {res.get('result', res.get('output', 'N/A'))}" for res in results])
         
         prompt = (
             f"あなたは、一連のタスク実行結果を分析し、ユーザーへの最終的な応答を生成するAIです。\n"
@@ -21,18 +31,11 @@ class AnalyzerAgent(BaseAgent):
             f"### 実行されたタスクの結果リスト:\n{formatted_results}\n\n"
             f"### 指示:\n"
             f"- 上記の結果を基に、ユーザーへの最終的な応答を、親しみやすく自然な日本語で生成してください。\n"
-            f"- 結果が画像生成の成功メッセージの場合、その成功を伝えてください。\n"
-            f"- 失敗の報告がある場合は、それを正直に、しかし丁寧に伝えてください。\n"
-            f"- あなた自身の思考プロセスや解説は含めず、ユーザーへの返信メッセージだけを出力してください。"
+            f"- 画像生成に成功した場合は必ず成功を伝えてください。\n"
+            f"- 失敗の場合は丁寧にお詫びし、再試行を促してください。\n"
+            f"- 解説や余計な情報は含めず、返信メッセージのみを出力してください。"
         )
 
         final_response = await self.call_llm(prompt)
         logging.info(f"分析に基づいた最終応答: {final_response}")
-        
-        # Analyzerの応答の中に、もし画像パスが含まれていたら、それを優先して返す
-        for res in results:
-            result_str = res.get('result', '')
-            if isinstance(result_str, str) and "画像を生成しました。パス: " in result_str:
-                return result_str
-        
         return final_response
