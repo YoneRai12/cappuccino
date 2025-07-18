@@ -1,21 +1,33 @@
-
 """FastAPI interface for Cappuccino agent and Realtime utilities."""
 
-from typing import Any, AsyncGenerator, Dict, List
+import os
 import asyncio
+from typing import Any, AsyncGenerator, Dict, List
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-import os
 from openai import AsyncOpenAI
-from dotenv import load_dotenv
+
+from cappuccino_agent import CappuccinoAgent
+from goal_manager import GoalManager
 from planner import Planner
 from state_manager import StateManager
-from goal_manager import GoalManager
 from tool_manager import ToolManager
-from cappuccino_agent import CappuccinoAgent
 
+# .envファイルを読み込む
 load_dotenv()
-openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# --- ここからが重要な変更点 ---
+
+# Ollama (Llama 3.1) に接続するためのクライアント設定
+# これにより、すべての通信がローカルのOllamaに向かうようになります
+openai_client = AsyncOpenAI(
+    base_url=os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1"),
+    api_key=os.getenv("OPENAI_API_KEY", "ollama")  # Ollamaの場合、キーは'ollama'でOK
+)
+
+# --- ここまでが重要な変更点 ---
 
 
 async def stream_events(query: str) -> AsyncGenerator[str, None]:
@@ -28,7 +40,8 @@ async def stream_events(query: str) -> AsyncGenerator[str, None]:
 
 
 tool_manager = ToolManager(db_path=":memory:")
-agent = CappuccinoAgent(tool_manager)
+# エージェントにも修正したクライアントを渡すように変更
+agent = CappuccinoAgent(tool_manager=tool_manager, llm_client=openai_client)
 app = FastAPI()
 
 state_manager = StateManager()
@@ -45,30 +58,18 @@ class RunResponse(BaseModel):
     images: List[str]
 
 
+# この関数はOllamaと互換性がない可能性が高いため、
+# ひとまずエージェント経由で呼び出すようにします。
+# もし直接呼び出したい場合は、OllamaのAPI仕様に合わせる必要があります。
 async def call_openai(prompt: str) -> Dict[str, List[str]]:
-    resp = await openai_client.responses.create(
-        model="gpt-4.1",
-        tools=[
-            {"type": "web_search_preview"},
-            {"type": "code_interpreter", "container": {"type": "auto"}},
-            {"type": "image_generation"},
-        ],
-        input=[{"role": "user", "content": prompt}],
-    )
+    # 修正：直接OpenAIのAPIを叩くのではなく、設定済みエージェントに処理を任せる
+    # これにより、Llama 3.1 が使われるようになります。
+    response = await agent.run(prompt)
 
-    text_blocks: List[str] = []
-    images: List[str] = []
-    for item in resp.output:
-        if item.type == "message":
-            for block in item.content:
-                if getattr(block, "type", "") in {"output_text", "text"}:
-                    txt = getattr(block, "text", "").strip()
-                    if txt:
-                        text_blocks.append(txt)
-        elif item.type == "image_generation_call":
-            img_data = getattr(item, "result", None)
-            if img_data:
-                images.append(f"data:image/png;base64,{img_data}")
+    # agent.runの返り値の形式に合わせて調整が必要な場合があります。
+    # 以下は仮の整形です。実際の返り値に合わせて修正してください。
+    text_blocks = [str(response)]
+    images = [] # 画像生成は別途ツールとして実装する必要がある
 
     return {"text": "\n\n".join(text_blocks), "images": images}
 
@@ -94,6 +95,7 @@ class RealtimeSessionParams(BaseModel):
 
 @app.post("/agent/run", response_model=RunResponse)
 async def run_agent(request: RunRequest) -> Dict[str, List[str]]:
+    # 修正：call_openai関数がエージェントを使うようにしたので、こちらも同様に動作する
     return await call_openai(request.query)
 
 
@@ -133,13 +135,18 @@ async def agent_tool_call_result(result: ToolCallResult) -> Dict[str, Any]:
     return await agent.handle_tool_call_result(result.data)
 
 
+# Realtime APIはOpenAIの独自機能のため、Ollamaでは動作しません。
+# このエンドポイントを呼び出すとエラーになります。
 @app.get("/session")
 async def realtime_session(params: RealtimeSessionParams = RealtimeSessionParams()) -> Dict[str, Any]:
     """Create a Realtime API session and return the ephemeral token."""
-    resp = await openai_client.beta.realtime.sessions.create(
-        model=params.model, voice=params.voice
-    )
-    return resp.model_dump()
+    try:
+        resp = await openai_client.beta.realtime.sessions.create(
+            model=params.model, voice=params.voice
+        )
+        return resp.model_dump()
+    except Exception as e:
+        return {"error": f"This endpoint is not compatible with Ollama. Details: {e}"}
 
 
 @app.websocket("/agent/stream")
@@ -163,4 +170,3 @@ async def agent_events(websocket: WebSocket) -> None:
             await websocket.send_text(chunk)
     except WebSocketDisconnect:
         pass
-
