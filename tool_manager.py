@@ -97,3 +97,60 @@ class ToolManager:
             (key, value, datetime.now().timestamp()),
         )
         await conn.commit()
+
+        # tool_manager.py (VRAM管理機能を追加した最終版)
+import logging
+import torch
+from image_generator import generate_image
+
+class ToolManager:
+    def __init__(self, db_path=":memory:", agent=None):
+        self.db_path = db_path
+        self._agent = agent
+
+    def set_agent(self, agent):
+        """VRAM管理のためにエージェント本体への参照を保持する"""
+        self._agent = agent
+
+    async def get_tools_schema(self):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_image",
+                    "description": "テキストプロンプトに基づいて画像を生成します。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": {"type": "string", "description": "生成したい画像の説明。詳細であるほど良い。"},
+                        },
+                        "required": ["prompt"],
+                    },
+                },
+            }
+        ]
+
+    async def generate_image(self, prompt: str):
+        """VRAMを管理しながら画像を生成する"""
+        if not self._agent:
+            logging.error("VRAM管理エラー: AgentがToolManagerにセットされていません。")
+            return "エラー: VRAM管理の初期化に失敗しました。"
+
+        try:
+            # 1. LLMをアンロード
+            logging.info("画像生成のため、LLMをVRAMからアンロードします...")
+            await self._agent.unload_llm()
+
+            # 2. 画像を生成
+            image_path = await generate_image(prompt)
+
+            return f"画像を生成しました。パス: {image_path}"
+        
+        except Exception as e:
+            logging.error(f"画像生成中のエラー: {e}", exc_info=True)
+            return f"エラー: 画像の生成に失敗しました - {e}"
+        
+        finally:
+            # 3. LLMを再ロード
+            logging.info("LLMをVRAMに再ロードします...")
+            await self._agent.load_llm()
