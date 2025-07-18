@@ -1,39 +1,56 @@
 # image_generator.py
+
 import torch
 from diffusers import DiffusionPipeline
 import tempfile
 import os
 from PIL import Image
 
-# このモデルは初回実行時に自動でダウンロードされます（数GBあります）
+# 初回のみ数GBのモデルがDLされます（SDXL Turbo）
 model_id = "stabilityai/sdxl-turbo"
 
-# パイプラインを一度だけロードして、再利用できるようにする
-# これにより、毎回モデルをロードする時間を節約できます
+# パイプラインを一度だけロード
 pipe = DiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16, variant="fp16")
 pipe = pipe.to("cuda")
 
-def generate_image(prompt: str) -> str:
+def generate_image(prompt: str, options: dict = None) -> str:
     """
-    ユーザーの指示（プロンプト）に基づいて画像を生成します。
-    Generates an image from a user's prompt.
-    Args:
-        prompt (str): 画像の内容を説明するテキスト。英語が望ましいです。
-                      A text description of the image content, preferably in English.
-    Returns:
-        str: 生成された画像が保存されている一時ファイルのパス。
-             The path to the temporary file where the generated image is saved.
-    """
-    print(f"画像生成を開始します... プロンプト: '{prompt}'")
-    
-    # 高速化のための推論ステップ数を設定（Turboモデルの場合）
-    image = pipe(prompt=prompt, num_inference_steps=1, guidance_scale=0.0).images[0]
+    ユーザーのプロンプトに基づいて画像を生成します。
+    任意でオプションパラメータも受け取れます。
 
-    # 一時ファイルに画像を保存
-    # delete=Falseにしないと、ファイルを閉じた瞬間に消えてしまう
+    Args:
+        prompt (str): 画像の説明テキスト（英語推奨）
+        options (dict): 以下のキーを含む任意のパラメータ
+            - width (int): 画像の幅（未使用：SDXL Turboは固定サイズ推奨）
+            - height (int): 画像の高さ（未使用）
+            - num_inference_steps (int): 推論ステップ数（デフォルト: 1）
+            - guidance_scale (float): ガイダンススケール（デフォルト: 0.0）
+            - seed (int): 乱数シード（指定時、再現性のある生成）
+
+    Returns:
+        str: 保存された画像ファイルのパス
+    """
+    if options is None:
+        options = {}
+
+    num_inference_steps = options.get("num_inference_steps", 1)
+    guidance_scale = options.get("guidance_scale", 0.0)
+    seed = options.get("seed", None)
+
+    generator = torch.manual_seed(seed) if seed is not None else None
+
+    print(f"画像生成中: prompt='{prompt}', steps={num_inference_steps}, scale={guidance_scale}, seed={seed}")
+    image = pipe(
+        prompt=prompt,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale,
+        generator=generator
+    ).images[0]
+
+    # 一時ファイルに保存
     fp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     image.save(fp, "PNG")
     fp.close()
-    
-    print(f"画像の生成が完了しました。パス: {fp.name}")
+
+    print(f"✅ 画像生成完了: {fp.name}")
     return fp.name
