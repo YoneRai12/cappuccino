@@ -1,4 +1,5 @@
 # run_bot.py (Webサーバーを完全に削除した、ボット起動専用の最終版)
+
 import asyncio
 import os
 import sys

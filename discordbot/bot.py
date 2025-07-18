@@ -119,30 +119,53 @@ def _strip_bot_mention(text: str) -> str:
     return re.sub(fr"<@!?{bot.user.id}>", "", text).strip()
 # ───────────────── AI応答処理 ─────────────────
 async def handle_agent_request(message: discord.Message, user_text: str):
-    if not user_text.strip(): await message.reply("質問を書いてね！"); return
+    if not user_text.strip():
+        await message.reply("質問を書いてね！")
+        return
     reply = await message.reply("思考中...")
     try:
         history = await _gather_reply_chain(message, limit=5)
         full_prompt = "\n".join([f"{m.author.display_name}: {m.content}" for m in history if m.content])
         full_prompt += f"\n{message.author.display_name}: {user_text}"
+
         final_answer = await cappuccino_agent.run(full_prompt)
         logger.info(f"エージェントからの最終回答: {final_answer}")
+
+        # パスが含まれるかどうか厳密に判定
         image_path = None
-        if isinstance(final_answer, str) and "画像を生成しました。パス: " in final_answer:
-            path_str = final_answer.replace("画像を生成しました。パス: ", "").strip()
-            if os.path.exists(path_str): image_path = path_str; response_text = "画像を生成しました！"
-            else: response_text = f"エラー: 生成された画像ファイルが見つかりませんでした。パス: {path_str}"
-        else: response_text = str(final_answer)
+        response_text = str(final_answer)
+
+        import re
+        # Windowsパスの正規表現（簡易）
+        m = re.search(r"([A-Za-z]:\\(?:[^\\/:*?\"<>|\r\n]+\\)*[^\\/:*?\"<>|\r\n]+\.png)", final_answer)
+        if m:
+            path_str = m.group(1)
+            if os.path.exists(path_str):
+                image_path = path_str
+                response_text = "画像を生成しました！"
+            else:
+                response_text = f"エラー: ファイルが存在しません。パス: {path_str}"
+
         if image_path:
             await reply.edit(content=response_text, attachments=[discord.File(image_path)])
-            try: os.remove(image_path)
-            except OSError as e: logger.error(f"一時ファイルの削除に失敗: {e}")
+            try:
+                os.remove(image_path)
+            except Exception as e:
+                logger.error(f"一時ファイル削除失敗: {e}")
         else:
-            if not response_text.strip(): response_text = "(空の応答)"
+            if not response_text.strip():
+                response_text = "(空の応答)"
             for i in range(0, len(response_text), 1950):
                 chunk = response_text[i:i+1950]
-                await (reply.edit(content=chunk) if i == 0 else message.channel.send(chunk))
-    except Exception as exc: logger.error(f"handle_agent_requestでエラー: {exc}", exc_info=True); await reply.edit(content=f"申し訳ありません、エラーが発生しました: {exc}")
+                if i == 0:
+                    await reply.edit(content=chunk)
+                else:
+                    await message.channel.send(chunk)
+
+    except Exception as exc:
+        logger.error(f"handle_agent_requestでエラー: {exc}", exc_info=True)
+        await reply.edit(content=f"申し訳ありません、エラーが発生しました: {exc}")
+
 # ───────────────── Discordイベントハンドラ ─────────────────
 @bot.event
 async def on_message(message: discord.Message):
