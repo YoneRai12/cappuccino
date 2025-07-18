@@ -1,4 +1,5 @@
 # tool_manager.py
+
 import logging
 import asyncio
 from typing import Any, Dict, List
@@ -20,13 +21,16 @@ class ToolManager:
     async def respond_to_user(self, text: str) -> str:
         return text
 
-    async def generate_image(self, prompt: str) -> str:
+    async def generate_image(self, prompt: str, **kwargs) -> str:
+        """
+        画像生成用ツール関数。追加の引数（num_inference_steps 等）は **kwargs で吸収。
+        """
         if not self._agent:
             logging.warning("VRAM管理エージェントがセットされていません。画像生成は直接関数を呼びます。")
             loop = asyncio.get_running_loop()
             try:
-                file_path = await loop.run_in_executor(None, generate_image, prompt)
-                return f"[画像生成成功] 画像を生成しました。パス: {file_path}"
+                file_path = await loop.run_in_executor(None, generate_image, prompt, kwargs)
+                return file_path
             except Exception as e:
                 logging.error(f"画像生成中のエラー: {e}", exc_info=True)
                 return f"エラー: 画像の生成に失敗しました - {e}"
@@ -36,17 +40,14 @@ class ToolManager:
             await self._agent.unload_agents()
 
             loop = asyncio.get_running_loop()
-            file_path = await loop.run_in_executor(None, generate_image, prompt)
-
-            return f"[画像生成成功] 画像を生成しました。パス: {file_path}"
+            file_path = await loop.run_in_executor(None, generate_image, prompt, kwargs)
+            return file_path
         except Exception as e:
             logging.error(f"画像生成中のエラー: {e}", exc_info=True)
             return f"エラー: 画像の生成に失敗しました - {e}"
 
     async def simple_math(self, expression: str) -> str:
-        """簡単な計算式を計算して返す。例: '3 + 5'"""
         try:
-            # 危険なのでevalは使わず、簡単な計算のみ許可
             allowed_chars = "0123456789+-*/(). "
             if any(c not in allowed_chars for c in expression):
                 return "エラー: 許可されていない文字が含まれています。"
@@ -70,7 +71,12 @@ class ToolManager:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "prompt": {"type": "string"}
+                            "prompt": {"type": "string"},
+                            "width": {"type": "integer", "default": 512},
+                            "height": {"type": "integer", "default": 512},
+                            "num_inference_steps": {"type": "integer", "default": 30},
+                            "guidance_scale": {"type": "number", "default": 7.5},
+                            "seed": {"type": "integer"}
                         },
                         "required": ["prompt"]
                     },
