@@ -1,91 +1,124 @@
-# agents/executor_agent.py (最終・確定版)
-import sys
-import os
+# agents/executor_agent.py (最適化・安定化版)
 import asyncio
 import logging
 import json
 import re
-from typing import Dict, Any
+import inspect
+from typing import Dict, Any, List
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from .base_agent import BaseAgent
 from tool_manager import ToolManager
 
 class ExecutorAgent(BaseAgent):
-    def __init__(self, tool_manager: ToolManager, llm):
-        super().__init__(llm); self.tool_manager = tool_manager
-    async def execute(self, plan_queue: asyncio.Queue, result_queue: asyncio.Queue):
+    """
+    計画されたタスクを解釈し、ツールを実行するエージェント。
+    LLMからの多様な応答形式に対応し、堅牢なエラーハンドリングを行う。
+    """
+    def __init__(self, tool_manager: ToolManager, **kwargs):
+        # 継承元の__init__を呼び出す
+        super().__init__(**kwargs)
+        self.tool_manager = tool_manager
+
+    async def execute_task_from_queue(self, plan_queue: asyncio.Queue, result_queue: asyncio.Queue):
+        """キューからタスクを取得し、実行サイクルを回す"""
         while True:
             try:
-                task = await plan_queue.get()
-                if not task or not task.get("task"):
+                task_info = await plan_queue.get()
+                
+                # タスクの形式を正規化 (文字列で来ても辞書で来ても対応)
+                if isinstance(task_info, str):
+                    task_description = task_info
+                elif isinstance(task_info, dict):
+                    task_description = task_info.get("task", "名前のないタスク")
+                else:
+                    logging.warning(f"不明な形式のタスクをスキップ: {task_info}")
                     plan_queue.task_done()
                     continue
-                    
-                logging.info(f"タスク実行中: {task['task']}")
-                tools_schema = await self.tool_manager.get_tools_schema()
-                prompt = (f"あなたは与えられたタスクを実行するAIです。最適なツールを選択・使用し、結果を返してください。\n"
-                          f"利用可能なツール:\n{json.dumps(tools_schema, indent=2, ensure_ascii=False)}\n\n"
-                          f"実行すべきタスク: \"{task['task']}\"\n\n"
-                          f"ツールを呼び出す場合は、'tool_calls'を含むJSONコードブロックのみを、他のテキストは含めずに返してください。例:\n"
-                          f"```json\n{{\"tool_calls\": [{{\"function\": {{\"name\": \"ツール名\", \"arguments\": \"{{\\\"引数名\\\": \\\"値\\\"}}\"}}}}], ...}}\n```")
                 
-                response = await self.call_llm(prompt)
-
-                # ★★★★★ ここからが最も重要な変更点 ★★★★★
-                result = response # デフォルトはLLMの生応答
+                logging.info(f"タスク実行開始: '{task_description}'")
                 
-                # 正規表現を使って、おしゃべりな返答の中からJSON部分だけを賢く抜き出す
-                match = re.search(r"```json\s*(\{.*?\})\s*```", response, re.DOTALL)
-                json_str = ""
-                if match:
-                    json_str = match.group(1)
-                else:
-                    # コードブロックが見つからない場合は、応答全体がJSONかもしれないと仮定
-                    if response.strip().startswith("{"):
-                        json_str = response.strip()
-
-                if json_str:
-                    try:
-                        tool_call_data = json.loads(json_str)
-                        if "tool_calls" in tool_call_data:
-                            calls = tool_call_data["tool_calls"]
-                            # ここでツールを実行し、その結果をresultに格納する
-                            result = await self.handle_tool_call(calls[0] if isinstance(calls, list) else calls)
-                    except json.JSONDecodeError:
-                        logging.error(f"JSONパースに失敗: {json_str}")
-                        # パースに失敗した場合は、LLMの応答をそのまま結果とする
-                        result = response
-                # ★★★★★★★★★★★★★★★★★★★★★★★★★★★
-
+                result = await self.run_single_task(task_description)
+                
                 logging.info(f"タスク結果: {result}")
-                await result_queue.put({"task": task, "result": result}); plan_queue.task_done()
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logging.error(f"タスク実行エラー: {e}", exc_info=True)
+                await result_queue.put({"task": task_info, "result": result})
+                
                 plan_queue.task_done()
 
+            except asyncio.CancelledError:
+                logging.info("ExecutorAgentのタスク実行がキャンセルされました。")
+                break
+            except Exception as e:
+                logging.error(f"タスク実行ループで予期せぬエラー: {e}", exc_info=True)
+                # エラーが発生しても、キューの処理は続ける
+                if 'plan_queue' in locals() and not plan_queue.empty():
+                    plan_queue.task_done()
+
+    async def run_single_task(self, task_description: str) -> Any:
+        """単一のタスク記述を解釈し、ツール呼び出しまたはLLMによる応答生成を行う"""
+        try:
+            tools_schema = await self.tool_manager.get_tools_schema()
+            prompt = (
+                f"あなたは与えられたタスクを実行するAIアシスタントです。\n"
+                f"以下のツールが利用可能です:\n{json.dumps(tools_schema, indent=2, ensure_ascii=False)}\n\n"
+                f"実行すべきタスク: \"{task_description}\"\n\n"
+                f"このタスクを達成するために、上記リストから最適なツールを一つだけ選択し、"
+                f"引数をJSON形式で指定してください。\n"
+                f"応答は必ず 'tool_calls' キーを含むJSONコードブロックのみで返してください。他のテキストは一切不要です。\n"
+                f"例:\n```json\n{{\"tool_calls\": [{{\"function\": {{\"name\": \"ツール名\", \"arguments\": {{\"引数名\": \"値\"}} }} }}]}}\n```\n"
+                f"もし適切なツールがない、またはタスクが挨拶のような単純な応答の場合は、"
+                f"ツールの代わりに最終的な答えを平文で直接返答してください。"
+            )
+            
+            raw_response = await self.call_llm(prompt)
+            logging.info(f"LLMからの生応答: {raw_response}")
+
+            # 正規表現でJSONコードブロックを安全に抽出
+            match = re.search(r"```json\s*(\{.*?\})\s*```", raw_response, re.DOTALL)
+            if match:
+                json_str = match.group(1)
+                try:
+                    data = json.loads(json_str)
+                    tool_calls = data.get("tool_calls")
+                    if isinstance(tool_calls, list) and len(tool_calls) > 0:
+                        # ツール呼び出しを実行
+                        return await self.handle_tool_call(tool_calls[0])
+                except json.JSONDecodeError:
+                    logging.warning(f"JSONの解析に失敗。LLMの応答をそのまま返します。JSON: {json_str}")
+                    return raw_response
+            
+            # JSONが見つからない、またはtool_callsが含まれない場合は、LLMの応答が最終結果
+            return raw_response
+
+        except Exception as e:
+            logging.error(f"単一タスクの実行中にエラー: {e}", exc_info=True)
+            return f"エラー: タスクの処理中に問題が発生しました - {e}"
+
     async def handle_tool_call(self, tool_call: Dict[str, Any]) -> Any:
+        """単一のツール呼び出しを処理する"""
         function_details = tool_call.get("function", {})
         tool_name = function_details.get("name")
-        tool_args_str = function_details.get("arguments", "{}")
+        # 引数は辞書型で渡されることを期待
+        tool_args = function_details.get("arguments", {})
 
-        try:
-            tool_args = json.loads(tool_args_str) if isinstance(tool_args_str, str) else tool_args_str
-            if isinstance(tool_args, str): tool_args = json.loads(tool_args)
-        except json.JSONDecodeError:
-             return f"エラー: 引数の形式が不正です。 ({tool_args_str})"
+        if not tool_name:
+            return "エラー: 呼び出すツール名が指定されていません。"
+        if not hasattr(self.tool_manager, tool_name):
+            return f"エラー: ツール '{tool_name}' が見つかりません。"
         
-        if hasattr(self.tool_manager, tool_name):
+        try:
             tool_method = getattr(self.tool_manager, tool_name)
-            import inspect
+            
+            # 関数のシグネチャをチェックし、必要な引数のみを渡す
             sig = inspect.signature(tool_method)
-            filtered_args = {k: v for k, v in tool_args.items() if k in sig.parameters}
+            valid_args = {k: v for k, v in tool_args.items() if k in sig.parameters}
+            
+            logging.info(f"ツール '{tool_name}' を引数 {valid_args} で呼び出します。")
             
             if asyncio.iscoroutinefunction(tool_method):
-                return await tool_method(**filtered_args)
+                return await tool_method(**valid_args)
             else:
-                return await asyncio.get_running_loop().run_in_executor(None, lambda: tool_method(**filtered_args))
-        return f"エラー: ツール '{tool_name}' が見つかりません。"
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(None, lambda: tool_method(**valid_args))
+        except Exception as e:
+            logging.error(f"ツール '{tool_name}' の実行中にエラー: {e}", exc_info=True)
+            return f"エラー: ツール '{tool_name}' の実行に失敗しました - {e}"
