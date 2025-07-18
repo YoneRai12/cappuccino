@@ -1,19 +1,20 @@
-# run_server_bot.py (元のシンプルな形)
+# run_bot.py (Webサーバーを完全に削除した、ボット起動専用の最終版)
 import asyncio
-import uvicorn
+import os
+import sys
 
-from api import app
+# プロジェクトルートをパスに追加 (これは正しい)
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
 from discordbot.bot import start_bot
 
-async def start_server():
-    """uvicornサーバーを起動する"""
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
-
 async def main():
-    """WebサーバーとDiscordボットを並行して起動する"""
-    await asyncio.gather(start_server(), start_bot())
+    """Discordボットのみを起動する"""
+    print("Discordボットを起動します...")
+    await start_bot()
 
 if __name__ == "__main__":
+    # Windowsでasyncioのイベントループポリシーを設定
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())

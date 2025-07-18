@@ -1,45 +1,32 @@
-# tool_manager.py （完成版・コピペ用）
+# tool_manager.py (VRAM管理に特化した最適化版)
+import logging
 import asyncio
-import json
 from typing import Any, Dict, List, Optional
-import aiosqlite
-from datetime import datetime
 
-# ★★★★★ ここで新しい道具をインポート ★★★★★
+# 画像生成関数をインポート
 from image_generator import generate_image
-# ★★★★★★★★★★★★★★★★★★★★★★★★
 
 class ToolManager:
-    def __init__(self, db_path: str = "agent_state.db"):
-        self.db_path = db_path
-        self.conn: Optional[aiosqlite.Connection] = None
+    """
+    ツールのスキーマ管理と、特にVRAMを大量に消費するツールの実行を管理するクラス。
+    """
+    def __init__(self, agent: Optional[Any] = None):
+        self._agent = agent
+        self.llm_is_loaded = True  # 初期状態ではLLMはロードされていると仮定
 
-    async def _get_db_connection(self) -> aiosqlite.Connection:
-        if self.conn is None:
-            self.conn = await aiosqlite.connect(self.db_path)
-        return self.conn
-
-    async def close(self) -> None:
-        if self.conn:
-            await self.conn.close()
-            self.conn = None
-
-    # ★★★★★ ここに画像生成ツールを追加 ★★★★★
-    async def generate_image(self, prompt: str) -> str:
+    def set_agent(self, agent: Any):
         """
-        ユーザーの指示に基づいて画像を生成します。非同期で実行されます。
-        Generates an image based on the user's prompt. Runs asynchronously.
+        VRAM管理のために、親であるエージェントへの参照を保持する。
         """
-        loop = asyncio.get_running_loop()
-        # 画像生成はVRAMを大量に使う重い処理なので、別スレッドで実行する
-        file_path = await loop.run_in_executor(None, generate_image, prompt)
-        return f"画像を生成しました。パス: {file_path}"
-    # ★★★★★★★★★★★★★★★★★★★★★★★★★★
+        self._agent = agent
+        # 親エージェントの状態をToolManagerの状態に同期させる
+        self.llm_is_loaded = getattr(self._agent, 'agents_are_loaded', True)
 
     async def get_tools_schema(self) -> List[Dict[str, Any]]:
-        """Returns the JSON schema for the available tools."""
+        """
+        LLMに提示するための、利用可能なツールのJSONスキーマを返す。
+        """
         return [
-            # ★★★★★ ここに画像生成ツールの定義を追加 ★★★★★
             {
                 "type": "function",
                 "function": {
@@ -50,107 +37,68 @@ class ToolManager:
                         "properties": {
                             "prompt": {
                                 "type": "string",
-                                "description": "生成したい画像の内容を詳細に記述したプロンプト。例: 'An astronaut riding a horse on mars, photorealistic'",
+                                "description": "生成したい画像の内容を詳細に記述したプロンプト。例: 'An astronaut cat riding a rocket, photorealistic'",
                             },
                         },
                         "required": ["prompt"],
                     },
                 },
             },
-            # ★★★★★★★★★★★★★★★★★★★★★★★★★★★
             {
                 "type": "function",
                 "function": {
-                    "name": "search_web",
-                    "description": "ウェブを検索して最新の情報や特定のトピックに関する情報を取得します。",
+                    "name": "respond_to_user",
+                    "description": "挨拶や単純な応答など、ツールを使わずにユーザーに直接テキストで返信します。",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {
+                            "text": {
                                 "type": "string",
-                                "description": "検索したいキーワードや質問。",
+                                "description": "ユーザーに返信するテキストメッセージ。"
                             },
                         },
-                        "required": ["query"],
+                        "required": ["text"],
                     },
                 },
             },
+            # 必要に応じて他のツール(search_webなど)もここに追加
         ]
 
-    async def search_web(self, query: str) -> str:
-        # この機能はまだ実装されていません
-        return f"ウェブ検索は現在準備中です。'{query}'を検索することはできませんでした。"
+    async def respond_to_user(self, text: str) -> str:
+        """
+        このツールはExecutorに最終的なテキスト応答を伝えるためのものです。
+        実際には何もしませんが、計画の一部として重要です。
+        """
+        return text
 
-    async def get_cached_result(self, key: str) -> Optional[str]:
-        conn = await self._get_db_connection()
-        await conn.execute(
-            "CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT, timestamp REAL)"
-        )
-        cursor = await conn.execute("SELECT value FROM cache WHERE key = ?", (key,))
-        row = await cursor.fetchone()
-        return row[0] if row else None
-
-    async def set_cached_result(self, key: str, value: str) -> None:
-        conn = await self._get_db_connection()
-        await conn.execute(
-            "INSERT OR REPLACE INTO cache (key, value, timestamp) VALUES (?, ?, ?)",
-            (key, value, datetime.now().timestamp()),
-        )
-        await conn.commit()
-
-        # tool_manager.py (VRAM管理機能を追加した最終版)
-import logging
-import torch
-from image_generator import generate_image
-
-class ToolManager:
-    def __init__(self, db_path=":memory:", agent=None):
-        self.db_path = db_path
-        self._agent = agent
-
-    def set_agent(self, agent):
-        """VRAM管理のためにエージェント本体への参照を保持する"""
-        self._agent = agent
-
-    async def get_tools_schema(self):
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "generate_image",
-                    "description": "テキストプロンプトに基づいて画像を生成します。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "prompt": {"type": "string", "description": "生成したい画像の説明。詳細であるほど良い。"},
-                        },
-                        "required": ["prompt"],
-                    },
-                },
-            }
-        ]
-
-    async def generate_image(self, prompt: str):
-        """VRAMを管理しながら画像を生成する"""
+    async def generate_image(self, prompt: str) -> str:
+        """
+        VRAMを管理しながら画像を生成する。
+        """
         if not self._agent:
             logging.error("VRAM管理エラー: AgentがToolManagerにセットされていません。")
             return "エラー: VRAM管理の初期化に失敗しました。"
 
         try:
-            # 1. LLMをアンロード
-            logging.info("画像生成のため、LLMをVRAMからアンロードします...")
-            await self._agent.unload_llm()
+            # Step 1: LLMがロードされていれば、アンロードする
+            if self.llm_is_loaded:
+                logging.info("画像生成のため、LLMをVRAMからアンロードします...")
+                await self._agent.unload_agents()
+                self.llm_is_loaded = False
+            else:
+                logging.info("LLMは既にアンロードされています。画像生成を続行します。")
 
-            # 2. 画像を生成
-            image_path = await generate_image(prompt)
+            # Step 2: 画像生成を実行 (重い処理なので別スレッドで)
+            loop = asyncio.get_running_loop()
+            file_path = await loop.run_in_executor(None, generate_image, prompt)
+            
+            return f"画像を生成しました。パス: {file_path}"
 
-            return f"画像を生成しました。パス: {image_path}"
-        
         except Exception as e:
             logging.error(f"画像生成中のエラー: {e}", exc_info=True)
             return f"エラー: 画像の生成に失敗しました - {e}"
         
         finally:
-            # 3. LLMを再ロード
-            logging.info("LLMをVRAMに再ロードします...")
-            await self._agent.load_llm()
+            # Step 3: LLMを再ロードする準備ができたことを親エージェントに通知
+            # 実際の再ロードは、次の会話リクエストが来た時にCappuccinoAgentが行う
+            logging.info("LLMの再ロード準備ができました。次のリクエストでロードされます。")

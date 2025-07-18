@@ -30,14 +30,14 @@ from dotenv import load_dotenv
 from dataclasses import dataclass
 from typing import Any
 
-# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 # ★★★ これが最重要の修正点です ★★★
 #
-# poker.pyが同じフォルダに移動したので、.(ドット)を付けて
+# poker.pyが同じフォルダにいるので、.(ドット)を付けて
 # 「このフォルダにあるpoker.py」と明示します。
 from .poker import PokerMatch, PokerView
 #
-# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
 
 # (これ以降のコードは、前回提案した最終版と全く同じでOKです)
@@ -149,11 +149,11 @@ async def on_message(message: discord.Message):
     if message.author == bot.user: return
     if bot.user in message.mentions or (message.reference and message.reference.resolved and message.reference.resolved.author == bot.user):
         await handle_agent_request(message, _strip_bot_mention(message.content))
-    if message.content.startswith("y?"):
+    if message.content.startswith("r?"): # コマンドは r? のまま
         await handle_agent_request(message, message.content[2:].strip())
 @bot.event
 async def on_ready():
-    await bot.change_presence(status=Status.online, activity=Activity(type=ActivityType.playing, name="y!help | @メンションで会話"))
+    await bot.change_presence(status=Status.online, activity=Activity(type=ActivityType.playing, name="r? | @メンションで会話"))
     logger.info(f"LOGIN: {bot.user} (ID: {bot.user.id})")
 
 # ───────────────── 起動用関数 ─────────────────
