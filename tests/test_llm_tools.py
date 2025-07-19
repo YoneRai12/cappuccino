@@ -9,7 +9,7 @@ from tool_manager import ToolManager, log_tool
 
 class DummyToolManager(ToolManager):
     def __init__(self):
-        super().__init__(db_path=":memory:")
+        super().__init__()
         self.called = False
 
     @log_tool

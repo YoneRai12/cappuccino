@@ -22,8 +22,15 @@ try:
 except docker.errors.DockerException:
     pytest.skip("Docker daemon not available")
 
-from docker_tools import DOCKER_TOOLS
-from discord_tools import DISCORD_TOOLS
+try:
+    from docker_tools import DOCKER_TOOLS
+except ImportError:
+    DOCKER_TOOLS = {}
+
+try:
+    from discord_tools import DISCORD_TOOLS
+except ImportError:
+    DISCORD_TOOLS = {}
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

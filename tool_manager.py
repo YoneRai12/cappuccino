@@ -3,7 +3,12 @@
 import logging
 import asyncio
 from typing import Any, Dict, List
-from image_generator import generate_image  # 画像生成関数を実装済みのモジュールからimport
+try:
+    from image_generator import generate_image  # 画像生成関数を実装済みのモジュールからimport
+except ImportError:
+    # 画像生成機能が利用できない場合のフォールバック
+    def generate_image(prompt: str, **kwargs) -> str:
+        return f"エラー: 画像生成機能が利用できません。プロンプト: {prompt}"
 
 class ToolManager:
     def __init__(self):

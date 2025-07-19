@@ -5,7 +5,10 @@ Provides tools for Discord interactions through the ToolManager.
 
 import asyncio
 from typing import Any, Dict, Optional
-from discord_manager import DiscordManager
+try:
+    from discord_manager import DiscordManager
+except ImportError:
+    DiscordManager = None
 import logging
 import os
 

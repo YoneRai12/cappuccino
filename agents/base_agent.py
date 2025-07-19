@@ -2,12 +2,12 @@
 import logging
 import os
 from openai import AsyncOpenAI
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 class BaseAgent:
-    def __init__(self, api_key: str, api_base: str, model: str, system_prompt: str):
-        self.api_key = os.getenv("OPENAI_API_KEY", api_key)
-        self.api_base = os.getenv("OPENAI_API_BASE", api_base)
+    def __init__(self, api_key: Optional[str], api_base: Optional[str], model: str, system_prompt: str):
+        self.api_key = os.getenv("OPENAI_API_KEY", api_key or "")
+        self.api_base = os.getenv("OPENAI_API_BASE", api_base or "")
         self.model = model
         self.system_prompt = system_prompt
         

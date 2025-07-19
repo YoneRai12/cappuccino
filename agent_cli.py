@@ -3,6 +3,7 @@ import asyncio
 import base64
 import io
 import os
+from typing import Dict, List
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from PIL import Image
@@ -11,7 +12,7 @@ load_dotenv()
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
 
 
-async def call_openai(prompt: str) -> dict[str, list[str]]:
+async def call_openai(prompt: str) -> Dict[str, List[str]]:
     """Send a prompt directly to OpenAI and return text and images."""
     resp = await client.responses.create(
         model="gpt-4.1",
