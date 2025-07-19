@@ -17,6 +17,7 @@ class PlannerAgent(BaseAgent):
                 f"- Your response MUST be ONLY the raw JSON array (`[...]`), with no other text or explanations.\n"
                 f"- DO NOT use image generation unless the user explicitly asks for it.\n"
                 f"- Avoid suggesting image generation as a default response.\n"
+                f"- Only use `get_current_time` if the user clearly asks for the current time or date. Do NOT use it for general questions, greetings, or vague queries.\n"
                 f"- If using `generate_image`, you MAY include optional fields:\n"
                 f"    - `num_inference_steps`: (e.g. 40)\n"
                 f"    - `guidance_scale`: (e.g. 12.5)\n"
@@ -35,8 +36,14 @@ class PlannerAgent(BaseAgent):
             json_str_no_trailing_comma = re.sub(r',\s*([]}])', r'\1', json_str)
             plan = json.loads(json_str_no_trailing_comma)
 
-            # 👇 画像生成タスクのプロンプトを強化する
+            # get_current_timeのフィルタ
+            time_keywords = ["時刻", "時間", "何時", "日付", "today", "now", "time", "date"]
+            user_query_lower = user_query.lower()
+            contains_time = any(k in user_query or k in user_query_lower for k in time_keywords)
+
             for task in plan:
+                if task.get("function") == "get_current_time" and not contains_time:
+                    continue  # 明示的な時刻質問でなければスキップ
                 if task.get("function") == "generate_image" and "prompt" in task:
                     original_prompt = task["prompt"]
                     enhanced_prompt = await self.enhance_prompt(original_prompt)
