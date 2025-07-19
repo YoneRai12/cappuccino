@@ -119,21 +119,37 @@ def nvidia_smi_processes() -> Dict[str, Any]:
     Returns:
         Dict containing process information
     """
+    import platform
     try:
-        result = subprocess.run(['nvidia-smi', 'pmon', '-c', '1'], 
-                              capture_output=True, text=True, timeout=10)
-        
-        if result.returncode != 0:
-            return {"error": "Failed to get process information"}
-        
-        return {
-            "status": "success",
-            "processes": result.stdout
-        }
-        
+        if platform.system() == "Windows":
+            # Windowsではpmonが使えないため、compute-appsで取得
+            result = subprocess.run([
+                'nvidia-smi',
+                '--query-compute-apps=pid,process_name,gpu_uuid,used_memory',
+                '--format=csv,noheader,nounits'
+            ], capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                return {"error": f"Failed to get process information (Windows): {result.stderr.strip()}"}
+            # ヘッダーを付与して見やすく
+            header = "pid,process_name,gpu_uuid,used_memory(MB)"
+            processes = header + "\n" + result.stdout.strip()
+            return {
+                "status": "success",
+                "processes": processes
+            }
+        else:
+            # Linux等は従来通り
+            result = subprocess.run(['nvidia-smi', 'pmon', '-c', '1'], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                return {"error": f"Failed to get process information (Linux): {result.stderr.strip()}"}
+            return {
+                "status": "success",
+                "processes": result.stdout
+            }
     except Exception as e:
         logger.error(f"nvidia_smi_processes failed: {e}")
-        return {"error": str(e)}
+        return {"error": f"Exception: {e}"}
 
 
 def nvidia_smi_kill_process(pid: int) -> Dict[str, Any]:

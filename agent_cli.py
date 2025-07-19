@@ -42,7 +42,8 @@ async def call_openai(prompt: str) -> Dict[str, List[str]]:
 
 
 def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore
     query = sys.argv[1] if len(sys.argv) > 1 else input("Query: ")
     result = asyncio.run(call_openai(query))
 
