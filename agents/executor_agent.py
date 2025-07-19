@@ -2,12 +2,12 @@
 
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from .base_agent import BaseAgent
 from tool_manager import ToolManager
 
 class ExecutorAgent(BaseAgent):
-    def __init__(self, tool_manager: ToolManager, api_key: str, api_base: str, model: str, system_prompt: str):
+    def __init__(self, tool_manager: ToolManager, api_key: Optional[str], api_base: Optional[str], model: str, system_prompt: str):
         super().__init__(api_key=api_key, api_base=api_base, model=model, system_prompt=system_prompt)
         self.tool_manager = tool_manager
 

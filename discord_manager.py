@@ -57,21 +57,25 @@ class DiscordManager:
         
         @self.bot.event
         async def on_ready():
-            logger.info(f'Discord bot logged in as {self.bot.user} (ID: {self.bot.user.id})')
-            self.is_running = True
-            
-            # Add ready event to queue
-            self.event_queue.put({
-                "type": "bot_ready",
-                "user": str(self.bot.user),
-                "user_id": self.bot.user.id,
-                "timestamp": datetime.now().isoformat()
-            })
+            if self.bot.user:
+                logger.info(f'Discord bot logged in as {self.bot.user} (ID: {self.bot.user.id})')
+                self.is_running = True
+                
+                # Add ready event to queue
+                self.event_queue.put({
+                    "type": "bot_ready",
+                    "user": str(self.bot.user),
+                    "user_id": self.bot.user.id,
+                    "timestamp": datetime.now().isoformat()
+                })
+            else:
+                logger.error("Bot user is None")
+                self.is_running = False
         
         @self.bot.event
         async def on_message(message):
             # Ignore messages from the bot itself
-            if message.author.id == self.bot.user.id:
+            if self.bot.user and message.author.id == self.bot.user.id:
                 return
             
             # Create message event
@@ -103,7 +107,7 @@ class DiscordManager:
         
         @self.bot.event
         async def on_reaction_add(reaction, user):
-            if user.id == self.bot.user.id:
+            if self.bot.user and user.id == self.bot.user.id:
                 return
             
             reaction_event = {
