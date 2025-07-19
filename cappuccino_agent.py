@@ -7,6 +7,7 @@ from agents import PlannerAgent, ExecutorAgent, AnalyzerAgent
 from tool_manager import ToolManager
 from state_manager import StateManager
 from self_improver import SelfImprover
+import os
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -59,7 +60,7 @@ class CappuccinoAgent:
             tool_manager=self.tool_manager
         )
 
-    async def run(self, user_query: str) -> str:
+    async def run(self, user_query: str) -> dict:
         try:
             await self.add_message("user", user_query)
             logging.info("📥 PlannerAgent にタスクを依頼します...")
@@ -88,10 +89,16 @@ class CappuccinoAgent:
                 logging.info("🛑 ExecutorAgentタスクは正常にキャンセルされました。")
 
             results = []
+            image_files = []
             while not result_queue.empty():
                 result = await result_queue.get()
                 logging.info(f"📦 ExecutorAgentの結果: {result}")
                 results.append(result)
+                # generate_imageのoutputが画像パスならfilesに追加
+                if result.get("function") == "generate_image":
+                    output = result.get("output")
+                    if isinstance(output, str) and os.path.exists(output):
+                        image_files.append(output)
 
             if not results:
                 logging.warning("⚠️ ExecutorAgentの結果が空です。Analyzerはスキップされます。")
@@ -101,16 +108,18 @@ class CappuccinoAgent:
                 )
                 logging.info("🧪 Analyzer に仮出力を渡しました。")
             else:
+                # get_current_timeの結果を除外
+                filtered_results = [r for r in results if r.get("function") != "get_current_time"]
                 logging.info("🔍 AnalyzerAgent による分析を開始します...")
-                analysis = await self.analyzer_agent.analyze(user_query, results)
+                analysis = await self.analyzer_agent.analyze(user_query, filtered_results)
                 logging.info(f"💬 AnalyzerAgent の分析結果: {analysis}")
 
             await self.add_message("assistant", analysis)
-            return analysis
+            return {"text": analysis, "files": image_files}
 
         except Exception as e:
             logging.error(f"❌ CappuccinoAgent.runでエラー: {e}", exc_info=True)
-            return f"申し訳ありません、処理中にエラーが発生しました: {e}"
+            return {"text": f"申し訳ありません、処理中にエラーが発生しました: {e}", "files": []}
 
     async def process(self, prompt: str) -> str:
         # 必要に応じてLLMやDBをここに追加

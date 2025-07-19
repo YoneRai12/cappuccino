@@ -137,36 +137,39 @@ async def handle_agent_request(message: discord.Message, user_text: str):
     if not user_text.strip():
         await message.reply("質問を書いてね！")
         return
+    # コマンド形式でget_current_timeを直接呼び出し
+    if user_text.strip().lower() in ["/get_current_time", "!get_current_time"]:
+        from tool_manager import ToolManager
+        tool_manager = ToolManager()
+        get_time_func = tool_manager.get_tool_by_name("get_current_time")
+        if get_time_func:
+            result = await get_time_func()
+            await message.reply(str(result))
+        else:
+            await message.reply("get_current_timeツールが見つかりませんでした。")
+        return
     reply = await message.reply("思考中...")
     try:
         history = await _gather_reply_chain(message, limit=5)
         full_prompt = "\n".join([f"{m.author.display_name}: {m.content}" for m in history if m.content])
         full_prompt += f"\n{message.author.display_name}: {user_text}"
 
-        final_answer = await cappuccino_agent.run(full_prompt)
-        logger.info(f"エージェントからの最終回答: {final_answer}")
+        result = await cappuccino_agent.run(full_prompt)
+        logger.info(f"エージェントからの最終回答: {result}")
 
-        # パスが含まれるかどうか厳密に判定
-        image_path = None
-        response_text = str(final_answer)
+        image_paths = result.get("files", []) if isinstance(result, dict) else []
+        response_text = result.get("text", str(result)) if isinstance(result, dict) else str(result)
 
-        import re
-        # Windowsパスの正規表現（簡易）
-        m = re.search(r"([A-Za-z]:\\(?:[^\\/:*?\"<>|\r\n]+\\)*[^\\/:*?\"<>|\r\n]+\.png)", final_answer)
-        if m:
-            path_str = m.group(1)
-            if os.path.exists(path_str):
-                image_path = path_str
-                response_text = "画像を生成しました！"
-            else:
-                response_text = f"エラー: ファイルが存在しません。パス: {path_str}"
-
-        if image_path:
-            await reply.edit(content=response_text, attachments=[discord.File(image_path)])
-            try:
-                os.remove(image_path)
-            except Exception as e:
-                logger.error(f"一時ファイル削除失敗: {e}")
+        if image_paths:
+            # 画像が複数の場合も対応
+            files = [discord.File(p) for p in image_paths if os.path.exists(p)]
+            await reply.edit(content="画像を生成しました！", attachments=files)
+            # 送信後に削除
+            for p in image_paths:
+                try:
+                    os.remove(p)
+                except Exception as e:
+                    logger.error(f"一時ファイル削除失敗: {e}")
         else:
             if not response_text.strip():
                 response_text = "(空の応答)"
@@ -176,6 +179,17 @@ async def handle_agent_request(message: discord.Message, user_text: str):
                     await reply.edit(content=chunk)
                 else:
                     await message.channel.send(chunk)
+
+        # 1分後にVRAM開放
+        async def vram_clear_task():
+            await asyncio.sleep(60)
+            try:
+                from docker_tools import nvidia_smi_clear_memory
+                result = nvidia_smi_clear_memory()
+                logger.info(f"[VRAM自動開放] 結果: {result}")
+            except Exception as e:
+                logger.error(f"[VRAM自動開放] エラー: {e}")
+        asyncio.create_task(vram_clear_task())
 
     except Exception as exc:
         logger.error(f"handle_agent_requestでエラー: {exc}", exc_info=True)
@@ -394,6 +408,59 @@ async def gpu_processes(interaction: discord.Interaction):
     except Exception as e:
         logger.error(f"GPU processes command error: {e}")
         await interaction.followup.send(f"❌ プロセス情報の取得中にエラーが発生しました: {e}")
+
+# ───────────────── 国旗翻訳ユーティリティ ─────────────────
+FLAG_MAP = {}
+FLAG_REVERSE_MAP = {}
+FLAG_TXT_PATH = os.path.join(ROOT_DIR, "flags.txt")
+if os.path.exists(FLAG_TXT_PATH):
+    with open(FLAG_TXT_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 3:
+                emoji, _, country = parts[0], parts[1], " ".join(parts[2:])
+                FLAG_MAP[country.lower()] = emoji
+                FLAG_REVERSE_MAP[emoji] = country
+
+async def cmd_flag(msg: discord.Message, arg: str):
+    """国名→国旗絵文字、または国旗絵文字→国名を翻訳"""
+    arg = arg.strip()
+    if not arg:
+        await msg.reply("国名または国旗絵文字を指定してください。")
+        return
+    # 国名→絵文字
+    emoji = FLAG_MAP.get(arg.lower())
+    if emoji:
+        await msg.reply(emoji)
+        return
+    # 絵文字→国名
+    country = FLAG_REVERSE_MAP.get(arg)
+    if country:
+        await msg.reply(country)
+        return
+    await msg.reply("該当する国旗・国名が見つかりませんでした。")
+
+# flags.txt を読み込み「絵文字 ➜ ISO 国コード」を作る
+SPECIAL_EMOJI_ISO: dict[str, str] = {}
+try:
+    FLAGS_PATH = os.path.join(ROOT_DIR, "flags.txt")
+    with open(FLAGS_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                emoji = parts[0]                  # 例 🇯🇵
+                shortcode = parts[1]              # 例 :flag_jp:
+                if shortcode.startswith(":flag_") and shortcode.endswith(":"):
+                    iso = shortcode[6:-1].upper() # jp -> JP
+                    SPECIAL_EMOJI_ISO[emoji] = iso
+except FileNotFoundError:
+    logger.warning("flags.txt not found. Flag translation reactions disabled")
 
 # ───────────────── 起動用関数 ─────────────────
 async def start_bot():
