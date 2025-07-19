@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from agents import PlannerAgent, ExecutorAgent, AnalyzerAgent
 from tool_manager import ToolManager
 from state_manager import StateManager
@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 
 class CappuccinoAgent:
-    def __init__(self, api_key: str = None, api_base: str = None):
+    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
         self.api_key = api_key
         self.api_base = api_base
 
@@ -34,21 +34,21 @@ class CappuccinoAgent:
 
         # 各エージェントを初期化
         self.planner_agent = PlannerAgent(
-            api_key=api_key,
-            api_base=api_base,
+            api_key=api_key or "",
+            api_base=api_base or "",
             model=planner_model,
             system_prompt=planner_system_prompt
         )
         self.executor_agent = ExecutorAgent(
             tool_manager=self.tool_manager,
-            api_key=api_key,
-            api_base=api_base,
+            api_key=api_key or "",
+            api_base=api_base or "",
             model=executor_model,
             system_prompt=executor_system_prompt
         )
         self.analyzer_agent = AnalyzerAgent(
-            api_key=api_key,
-            api_base=api_base,
+            api_key=api_key or "",
+            api_base=api_base or "",
             model=analyzer_model,
             system_prompt=analyzer_system_prompt
         )

@@ -1,5 +1,6 @@
 import aio_pika
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, Union
+from aio_pika.abc import AbstractRobustConnection, AbstractChannel
 
 
 class QueueManager:
@@ -7,13 +8,17 @@ class QueueManager:
 
     def __init__(self, url: str = "amqp://guest:guest@localhost/") -> None:
         self.url = url
-        self.connection: Optional[aio_pika.RobustConnection] = None
-        self.channel: Optional[aio_pika.abc.AbstractChannel] = None
+        self.connection: Optional[AbstractRobustConnection] = None
+        self.channel: Optional[AbstractChannel] = None
 
     async def connect(self) -> None:
         """Establish connection and channel."""
-        self.connection = await aio_pika.connect_robust(self.url)
-        self.channel = await self.connection.channel()
+        try:
+            self.connection = await aio_pika.connect_robust(self.url)
+            if self.connection:
+                self.channel = await self.connection.channel()
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to RabbitMQ: {e}")
 
     async def close(self) -> None:
         """Close connection if open."""

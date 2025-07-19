@@ -20,7 +20,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
 
 # ToolManagerは使わないシンプル版に変更（もし使うならコメントアウト解除）
-# tool_manager = ToolManager(db_path=":memory:")
+# tool_manager = ToolManager()
 
 # CappuccinoAgentはシンプルに初期化
 agent = CappuccinoAgent(
