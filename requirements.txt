@@ -16,7 +16,7 @@ matplotlib
 typing_extensions>=4.9
 fastapi
 pytest
-
+requests
 pytest-asyncio
 python-dotenv
 networkx

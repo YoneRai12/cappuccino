@@ -25,6 +25,22 @@ class PlannerAgent(BaseAgent):
                 f"    - `width`, `height`: up to 1024px each\n"
             )
 
+            # 時刻取得系のキーワードが含まれる場合はツールで取得
+            time_keywords = ["時刻", "時間", "何時", "日付", "today", "now", "time", "date"]
+            if any(k in user_query or k in user_query.lower() for k in time_keywords):
+                await plan_queue.put({"function": "get_current_time"})
+                return
+            # 画像生成以外はすべて自然文のみで返す
+            if not any(x in user_query for x in ["画像", "image", "イメージ", "生成"]):
+                prompt_natural = (
+                    f"ユーザーのリクエスト: {user_query}\n"
+                    f"あなたはAIアシスタントです。ユーザーの質問に対して、JSONや構造化データを使わず、自然な文章だけで返答してください。"
+                )
+                response = await self.call_llm(prompt_natural)
+                await plan_queue.put({"function": "respond_to_user", "parameters": {"text": response.strip()}})
+                return
+            # ここから下は画像生成が必要な場合のみ実行
+
             raw_response = await self.call_llm(prompt)
             logging.info(f"LLMからの生計画応答: {raw_response}")
 
@@ -33,7 +49,10 @@ class PlannerAgent(BaseAgent):
                 raise ValueError("Response does not contain a valid JSON array.")
 
             json_str = match.group(0)
-            json_str_no_trailing_comma = re.sub(r',\s*([]}])', r'\1', json_str)
+            # ダブルクォートの重複を修正
+            json_str = re.sub(r'""([^"]*?)""', r'"\1"', json_str)
+            # 不正な末尾カンマを修正
+            json_str_no_trailing_comma = re.sub(r',\s*([\]}])', r'\1', json_str)
             plan = json.loads(json_str_no_trailing_comma)
 
             # get_current_timeのフィルタ
