@@ -100,6 +100,12 @@ class CappuccinoAgent:
                     if isinstance(output, str) and os.path.exists(output):
                         image_files.append(output)
 
+            # get_current_timeなどツール実行のoutputがあれば、そのまま返す
+            for result in results:
+                if result.get("function") == "get_current_time" and result.get("output"):
+                    await self.add_message("assistant", result["output"])
+                    return {"text": result["output"], "files": image_files}
+
             if not results:
                 logging.warning("⚠️ ExecutorAgentの結果が空です。Analyzerはスキップされます。")
                 analysis = await self.analyzer_agent.analyze(
