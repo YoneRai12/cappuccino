@@ -41,7 +41,7 @@ from .poker import PokerMatch, PokerView
 #
 # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
-from image_generator import generate_image, translate_to_english
+from image_generator import generate_image, generate_image_with_negative
 
 is_generating_image = False
 image_generating_channel_id = None
@@ -239,17 +239,33 @@ async def download_youtube_audio(url: str) -> str:
                 downloaded_file = tmp_file.name.replace('.mp3', '.mp3')
                 if not os.path.exists(downloaded_file):
                     # 他の拡張子を試す
-                    for ext in ['.webm', '.m4a', '.opus']:
+                    for ext in ['.webm', '.m4a', '.opus', '.mp3']:
                         alt_file = tmp_file.name.replace('.mp3', ext)
                         if os.path.exists(alt_file):
+                            # ファイルサイズが安定するまで待つ
+                            last_size = -1
+                            for _ in range(10):
+                                try:
+                                    size = os.path.getsize(alt_file)
+                                    if size == last_size:
+                                        break
+                                    last_size = size
+                                except Exception:
+                                    pass
+                                time.sleep(0.2)
                             downloaded_file = alt_file
                             break
-                
+                # ファイルが使えるまでリトライ
+                for _ in range(10):
+                    try:
+                        with open(downloaded_file, "rb") as f:
+                            break
+                    except PermissionError:
+                        time.sleep(0.2)
                 if os.path.exists(downloaded_file):
                     return downloaded_file, title, duration
                 else:
                     return None, None, None
-                    
     except Exception as e:
         logger.error(f"YouTube音声ダウンロードエラー: {e}")
         return None, None, None
@@ -1094,9 +1110,82 @@ class QualityView(View):
             except:
                 pass
 
+# 画像生成ブロックユーザーリスト（ファイル保存対応）
+IMAGEGEN_DENY_USERS_FILE = "discordbot/imagegen_deny_users.json"
+try:
+    with open(IMAGEGEN_DENY_USERS_FILE, "r", encoding="utf-8") as f:
+        IMAGEGEN_DENY_USERS = set(json.load(f))
+except Exception:
+    IMAGEGEN_DENY_USERS = set()
+
+def save_imagegen_deny_users():
+    with open(IMAGEGEN_DENY_USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(IMAGEGEN_DENY_USERS), f)
+
+@bot.tree.command(name="imagegen_block", description="指定ユーザーの画像生成を禁止（管理者のみ）")
+@app_commands.describe(user="画像生成を禁止するユーザー")
+async def imagegen_block(interaction: discord.Interaction, user: discord.User):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者のみ実行できます。", ephemeral=True)
+        return
+    IMAGEGEN_DENY_USERS.add(user.id)
+    save_imagegen_deny_users()
+    await interaction.response.send_message(f"{user.display_name} の画像生成を禁止しました。", ephemeral=True)
+
+@bot.tree.command(name="imagegen_unblock", description="指定ユーザーの画像生成禁止を解除（管理者のみ）")
+@app_commands.describe(user="画像生成禁止を解除するユーザー")
+async def imagegen_unblock(interaction: discord.Interaction, user: discord.User):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者のみ実行できます。", ephemeral=True)
+        return
+    IMAGEGEN_DENY_USERS.discard(user.id)
+    save_imagegen_deny_users()
+    await interaction.response.send_message(f"{user.display_name} の画像生成禁止を解除しました。", ephemeral=True)
+
+# グローバル画像生成許可フラグ（ファイル保存対応）
+IMAGEGEN_ENABLED_FILE = "discordbot/imagegen_enabled.json"
+try:
+    with open(IMAGEGEN_ENABLED_FILE, "r", encoding="utf-8") as f:
+        IMAGEGEN_ENABLED = json.load(f)
+except Exception:
+    IMAGEGEN_ENABLED = True
+
+def save_imagegen_enabled():
+    with open(IMAGEGEN_ENABLED_FILE, "w", encoding="utf-8") as f:
+        json.dump(IMAGEGEN_ENABLED, f)
+
+YONERAI12_ID = 1069941291661672498
+
+@bot.tree.command(name="imagegen_global_on", description="全ユーザーの画像生成を許可（よねらい専用）")
+async def imagegen_global_on(interaction: discord.Interaction):
+    if interaction.user.id != YONERAI12_ID:
+        await interaction.response.send_message("このコマンドは管理者のみ実行できます。", ephemeral=True)
+        return
+    global IMAGEGEN_ENABLED
+    IMAGEGEN_ENABLED = True
+    save_imagegen_enabled()
+    await interaction.response.send_message("全ユーザーの画像生成を許可しました。", ephemeral=True)
+
+@bot.tree.command(name="imagegen_global_off", description="全ユーザーの画像生成を禁止（よねらい専用）")
+async def imagegen_global_off(interaction: discord.Interaction):
+    if interaction.user.id != YONERAI12_ID:
+        await interaction.response.send_message("このコマンドは管理者のみ実行できます。", ephemeral=True)
+        return
+    global IMAGEGEN_ENABLED
+    IMAGEGEN_ENABLED = False
+    save_imagegen_enabled()
+    await interaction.response.send_message("全ユーザーの画像生成を禁止しました。", ephemeral=True)
+
+# 画像生成コマンドの先頭でチェック
 @bot.tree.command(name="画像生成", description="AI画像生成 - 日本語で詳細に書くほど精度が上がります")
 @app_commands.describe(prompt="生成したい画像の説明（日本語可）。英語で的確・詳細・構図・光・質感など、具体的に書くほど精度が上がります")
 async def imagegen(interaction: discord.Interaction, prompt: str):
+    if not IMAGEGEN_ENABLED:
+        await interaction.response.send_message("現在画像生成は管理者により停止中です。", ephemeral=True)
+        return
+    if interaction.user.id in IMAGEGEN_DENY_USERS:
+        await interaction.response.send_message("あなたは現在画像生成を利用できません。", ephemeral=True)
+        return
     await interaction.response.defer(ephemeral=True)
     
     try:
@@ -1173,6 +1262,37 @@ Negative: blurry, low quality, distorted, deformed, ugly"""
     except Exception as e:
         logger.error(f"画像生成コマンドエラー: {e}")
         await interaction.followup.send(f"❌ プロンプト処理中にエラーが発生しました: {e}")
+
+@bot.tree.command(name="画像生成heavy", description="プロンプト・ネガティブプロンプトを直接指定して画像生成（上級者向け）")
+@app_commands.describe(prompt="Stable Diffusion用プロンプト（英語推奨）", negative_prompt="ネガティブプロンプト（英語推奨）")
+async def imagegen_heavy(interaction: discord.Interaction, prompt: str, negative_prompt: str):
+    if not IMAGEGEN_ENABLED:
+        await interaction.response.send_message("現在画像生成は管理者により停止中です。", ephemeral=True)
+        return
+    if interaction.user.id in IMAGEGEN_DENY_USERS:
+        await interaction.response.send_message("あなたは現在画像生成を利用できません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        # 画像生成（プロンプトをそのまま渡す）
+        options = {"width": 512, "height": 768}  # 必要に応じてUIで選択可
+        path = await asyncio.to_thread(generate_image_with_negative, prompt, negative_prompt, options)
+        import os
+        file_size = os.path.getsize(path) / (1024 * 1024)
+        DISCORD_LIMIT_MB = 25
+        if file_size > DISCORD_LIMIT_MB:
+            await interaction.followup.send(f"❌ ファイルサイズが大きすぎて送信できません（{file_size:.2f}MB > {DISCORD_LIMIT_MB}MB）。画像サイズや画質を下げてください。", ephemeral=True)
+            try:
+                os.remove(path)
+            except:
+                pass
+            return
+        file = discord.File(path)
+        await interaction.followup.send(content="画像を生成しました！（Heavyモード）", file=file, ephemeral=True)
+        os.remove(path)
+    except Exception as e:
+        logger.error(f"画像生成Heavyコマンドエラー: {e}")
+        await interaction.followup.send(f"❌ Heavy画像生成または送信中にエラーが発生しました: {e}", ephemeral=True)
 
 # ───────────────── 地震情報・天気・ニュース機能 ─────────────────
 
@@ -1812,75 +1932,91 @@ async def serverinfo_command(interaction: discord.Interaction):
 @bot.tree.command(name="tts", description="🎤 テキストをずんだもんの声でVCに読み上げ")
 @app_commands.describe(text="読み上げるテキスト")
 async def tts_command(interaction: discord.Interaction, text: str):
-    """TTS読み上げコマンド"""
     try:
-        # ユーザーがVCに参加しているかチェック
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.response.send_message("❌ VCに参加してからこのコマンドを使用してください")
             return
-        
-        # ずんだもん風のテキストに変換
         zunda_text = f"ずんだもんです。{text}"
-        
-        # VOICEVOXを使用して音声生成
         audio_data = None
         if VOICEVOX_AVAILABLE:
             audio_data = await generate_zunda_voice(zunda_text)
-        
-        # VOICEVOXが失敗した場合や利用できない場合はgTTSを使用
         if audio_data is None and TTS_AVAILABLE:
             tts = gTTS(text=zunda_text, lang='ja', slow=False)
             audio_buffer = io.BytesIO()
             tts.write_to_fp(audio_buffer)
             audio_data = audio_buffer.getvalue()
-        
         if audio_data is None:
             await interaction.response.send_message("❌ 音声生成に失敗しました")
             return
-        
-        # 一時ファイルとして保存
         import tempfile
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
             tmp_file.write(audio_data)
-            audio_path = tmp_file.name
-        
-        # VCに接続（既に接続済みの場合は既存の接続を使用）
+            tts_path = tmp_file.name
+        tts_duration = get_wav_duration(tts_path)
+        # VCに接続
         if interaction.guild.voice_client is None:
             voice = await interaction.user.voice.channel.connect()
         else:
             voice = interaction.guild.voice_client
-        
-        # 音声を再生（高速化）
+        # サーバーごとの音量取得
+        volume = SERVER_MUSIC_VOLUME.get(str(interaction.guild.id), 1.0)
+        # 現在のBGMストリーミングURLを取得（仮: voice.source._source._input）
+        bgm_url = None
+        if hasattr(voice, 'source') and hasattr(voice.source, '_source') and hasattr(voice.source._source, '_input'):
+            bgm_url = voice.source._source._input
+        if bgm_url:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as bgm_file:
+                bgm_path = bgm_file.name
+            ok = save_streaming_bgm_segment(bgm_url, tts_duration, bgm_path)
+            if ok:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as mix_file:
+                    mix_path = mix_file.name
+                # ffmpegでamix合成（TTS中BGM音量0.5）
+                import subprocess
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-i', bgm_path,
+                    '-i', tts_path,
+                    '-filter_complex', '[0:a]volume=0.5[a0];[a0][1:a]amix=inputs=2:duration=first:dropout_transition=0',
+                    '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', mix_path
+                ]
+                subprocess.run(cmd, check=True)
+                play_path = mix_path
+            else:
+                play_path = tts_path
+        else:
+            play_path = tts_path
+        # 再生（サーバーごとの音量を必ず反映）
         try:
-            # 既に再生中の場合は待機時間を短縮
             if voice.is_playing():
-                await asyncio.sleep(0.5)
-            
-            # 音声を再生（FFmpegオプションを最適化）
+                voice.stop()
+            audio = discord.FFmpegPCMAudio(
+                play_path,
+                options='-vn -ar 48000 -ac 2 -b:a 128k'
+            )
+            audio = discord.PCMVolumeTransformer(audio, volume=volume)
             voice.play(
-                discord.FFmpegPCMAudio(
-                    audio_path,
-                    options='-vn -ar 48000 -ac 2 -b:a 128k'
-                ),
+                audio,
                 after=lambda e: cleanup()
             )
-            
-            # 再生終了後にファイルを削除
             def cleanup():
-                try:
-                    import os
-                    os.unlink(audio_path)
-                except:
-                    pass
-            
+                import os
+                for p in [tts_path, play_path]:
+                    try:
+                        os.unlink(p)
+                    except:
+                        pass
         except Exception as e:
             await interaction.response.send_message(f"❌ 音声再生に失敗しました: {e}")
             try:
                 import os
-                os.unlink(audio_path)
+                for p in [tts_path, play_path]:
+                    try:
+                        os.unlink(p)
+                    except:
+                        pass
             except:
                 pass
-        
     except Exception as e:
         logger.error(f"TTS command error: {e}")
         try:
@@ -2235,83 +2371,50 @@ async def poll_command(interaction: discord.Interaction, question: str, options:
         await interaction.response.send_message(f"❌ 投票作成に失敗しました: {e}")
 
 
-@bot.tree.command(name="play", description="🎵 YouTubeの音楽をVCで再生")
-@app_commands.describe(url="YouTubeのURL")
-async def play_command(interaction: discord.Interaction, url: str):
-    """YouTubeの音楽をVCで再生"""
-    await interaction.response.defer()
-    
-    # ユーザーがVCにいるかチェック
+@bot.tree.command(name="play", description="YouTube音楽をストリーミングまたはダウンロード再生")
+@app_commands.describe(
+    stream_url="ストリーミング再生したいYouTubeのURL（左側）",
+    download_url="ダウンロード再生したいYouTubeのURL（右側）"
+)
+async def play_command(interaction: discord.Interaction, stream_url: str = None, download_url: str = None):
+    await interaction.response.defer(ephemeral=True)
+    # VCにいるかチェック
     if not interaction.user.voice or not interaction.user.voice.channel:
         await interaction.followup.send("❌ VCに参加してから使用してください。", ephemeral=True)
         return
-    
-    # YouTube URLかチェック
-    if not ("youtube.com" in url or "youtu.be" in url):
-        await interaction.followup.send("❌ YouTubeのURLを入力してください。", ephemeral=True)
-        return
-    
-    try:
-        # ダウンロード中メッセージ
-        msg = await interaction.followup.send("🎵 YouTubeから音楽をダウンロード中...", ephemeral=False)
-        
-        # 音声をダウンロード
-        result = await download_youtube_audio(url)
-        if result is None:
-            await msg.edit(content="❌ 音声のダウンロードに失敗しました。")
+    voice_channel = interaction.user.voice.channel
+    voice = interaction.guild.voice_client or await voice_channel.connect()
+    # ストリーミング優先
+    if stream_url:
+        url, title, duration = get_youtube_audio_stream_url(stream_url)
+        if not url:
+            await interaction.followup.send("❌ ストリーミングURLの取得に失敗しました。", ephemeral=True)
             return
-        
-        file_path, title, duration = result
-        
-        if not file_path or not os.path.exists(file_path):
-            await msg.edit(content="❌ 音声ファイルの取得に失敗しました。")
-            return
-        
-        # VCに接続
-        voice_channel = interaction.user.voice.channel
-        voice = None
-        
-        if interaction.guild.voice_client:
-            voice = interaction.guild.voice_client
-        else:
-            voice = await voice_channel.connect()
-        
-        # 音声を再生
         try:
             voice.play(
-                discord.FFmpegPCMAudio(
-                    file_path,
-                    options='-vn -ar 48000 -ac 2 -b:a 128k'
-                ),
-                after=lambda e: cleanup_audio_file(file_path)
+                discord.FFmpegPCMAudio(url),
+                after=lambda e: print(f"ストリーミング再生終了: {e}")
             )
-            
-            # 再生情報を表示
-            duration_str = f"{duration//60}:{duration%60:02d}" if duration > 0 else "不明"
-            embed = discord.Embed(
-                title="🎵 音楽再生開始",
-                description=f"**{title}**",
-                color=discord.Color.green()
-            )
-            embed.add_field(name="⏱️ 再生時間", value=duration_str, inline=True)
-            embed.add_field(name="🎤 チャンネル", value=voice_channel.mention, inline=True)
-            
-            await msg.edit(content="", embed=embed)
-            
+            await interaction.followup.send(f"▶️ ストリーミング再生開始: {title}", ephemeral=True)
         except Exception as e:
-            await msg.edit(content=f"❌ 音声再生に失敗しました: {e}")
-            cleanup_audio_file(file_path)
-            
-    except Exception as e:
-        await interaction.followup.send(f"❌ エラーが発生しました: {e}", ephemeral=True)
-
-def cleanup_audio_file(file_path: str):
-    """音声ファイルを削除"""
-    try:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-    except Exception as e:
-        logger.error(f"音声ファイル削除エラー: {e}")
+            await interaction.followup.send(f"❌ ストリーミング再生に失敗: {e}", ephemeral=True)
+        return
+    elif download_url:
+        path, title, duration = download_youtube_audio(download_url)
+        if not path:
+            await interaction.followup.send("❌ ダウンロードに失敗しました。", ephemeral=True)
+            return
+        try:
+            voice.play(
+                discord.FFmpegPCMAudio(path),
+                after=lambda e: os.remove(path)
+            )
+            await interaction.followup.send(f"▶️ ダウンロード再生開始: {title}", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ ダウンロード再生に失敗: {e}", ephemeral=True)
+        return
+    else:
+        await interaction.followup.send("URLを入力してください（どちらか一方でOK）", ephemeral=True)
 
 @bot.tree.command(name="stop", description="⏹️ 音楽再生を停止")
 async def stop_command(interaction: discord.Interaction):
@@ -2352,3 +2455,131 @@ async def resume_command(interaction: discord.Interaction):
         await interaction.response.send_message("▶️ 音楽再生を再開しました。", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ 再開に失敗しました: {e}", ephemeral=True)
+
+# 画像生成コマンドの本体部分
+async def imagegen(interaction: discord.Interaction, prompt: str):
+    if not IMAGEGEN_ENABLED:
+        await interaction.response.send_message("現在画像生成は管理者により停止中です。", ephemeral=True)
+        return
+    if interaction.user.id in IMAGEGEN_DENY_USERS:
+        await interaction.response.send_message("あなたは現在画像生成を利用できません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        # ... 既存のプロンプト生成・画像生成処理 ...
+        # path = ... 画像ファイルパス
+        import os
+        file_size = os.path.getsize(path) / (1024 * 1024)  # MB
+        DISCORD_LIMIT_MB = 25  # Nitroやサーバーブーストで50/500MBに拡張可
+        if file_size > DISCORD_LIMIT_MB:
+            await interaction.followup.send(f"❌ ファイルサイズが大きすぎて送信できません（{file_size:.2f}MB > {DISCORD_LIMIT_MB}MB）。画像サイズや画質を下げてください。", ephemeral=True)
+            try:
+                os.remove(path)
+            except:
+                pass
+            return
+        file = discord.File(path)
+        await interaction.followup.send(content="画像を生成しました！", file=file, ephemeral=True)
+        os.remove(path)
+    except Exception as e:
+        logger.error(f"画像生成コマンドエラー: {e}")
+        await interaction.followup.send(f"❌ 画像生成または送信中にエラーが発生しました: {e}", ephemeral=True)
+
+from discordbot.youtube_audio import get_youtube_audio_stream_url, download_youtube_audio
+
+@bot.tree.command(name="ytplay", description="YouTube音楽をストリーミングまたはダウンロード再生")
+@app_commands.describe(
+    stream_url="ストリーミング再生したいYouTubeのURL（左側）",
+    download_url="ダウンロード再生したいYouTubeのURL（右側）"
+)
+async def ytplay_command(interaction: discord.Interaction, stream_url: str = None, download_url: str = None):
+    await interaction.response.defer(ephemeral=True)
+    # VCにいるかチェック
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.followup.send("❌ VCに参加してから使用してください。", ephemeral=True)
+        return
+    voice_channel = interaction.user.voice.channel
+    voice = interaction.guild.voice_client or await voice_channel.connect()
+    # ストリーミング優先
+    if stream_url:
+        url, title, duration = get_youtube_audio_stream_url(stream_url)
+        if not url:
+            await interaction.followup.send("❌ ストリーミングURLの取得に失敗しました。", ephemeral=True)
+            return
+        try:
+            voice.play(
+                discord.FFmpegPCMAudio(url),
+                after=lambda e: print(f"ストリーミング再生終了: {e}")
+            )
+            await interaction.followup.send(f"▶️ ストリーミング再生開始: {title}", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ ストリーミング再生に失敗: {e}", ephemeral=True)
+        return
+    elif download_url:
+        path, title, duration = download_youtube_audio(download_url)
+        if not path:
+            await interaction.followup.send("❌ ダウンロードに失敗しました。", ephemeral=True)
+            return
+        try:
+            voice.play(
+                discord.FFmpegPCMAudio(path),
+                after=lambda e: os.remove(path)
+            )
+            await interaction.followup.send(f"▶️ ダウンロード再生開始: {title}", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ ダウンロード再生に失敗: {e}", ephemeral=True)
+        return
+    else:
+        await interaction.followup.send("URLを入力してください（どちらか一方でOK）", ephemeral=True)
+
+import asyncio
+
+async def fade_volume(audio, start, end, duration=1.0, steps=10):
+    step = (end - start) / steps
+    for i in range(steps):
+        audio.volume = start + step * (i + 1)
+        await asyncio.sleep(duration / steps)
+
+# TTS再生時の例
+# music_audio = discord.PCMVolumeTransformer(music_audio, volume=1.0)
+# await fade_volume(music_audio, 1.0, 0.5, duration=1.0)
+# TTS再生...
+# await fade_volume(music_audio, 0.5, 1.0, duration=1.0)
+
+# 実際のTTS再生処理の前後でfade_volumeを呼び出すように組み込む
+
+import json
+
+MUSIC_VOLUME_FILE = "discordbot/music_volume.json"
+try:
+    with open(MUSIC_VOLUME_FILE, "r", encoding="utf-8") as f:
+        SERVER_MUSIC_VOLUME = json.load(f)
+except Exception:
+    SERVER_MUSIC_VOLUME = {}
+
+def save_music_volume():
+    with open(MUSIC_VOLUME_FILE, "w", encoding="utf-8") as f:
+        json.dump(SERVER_MUSIC_VOLUME, f)
+
+@bot.tree.command(name="music_volume", description="サーバーの音楽再生音量を設定（0.0〜1.0）")
+@app_commands.describe(volume="音量（0.0〜1.0）")
+async def music_volume_command(interaction: discord.Interaction, volume: float):
+    if not (0.0 <= volume <= 1.0):
+        await interaction.response.send_message("音量は0.0〜1.0で指定してください", ephemeral=True)
+        return
+    SERVER_MUSIC_VOLUME[str(interaction.guild.id)] = volume
+    save_music_volume()
+    await interaction.response.send_message(f"このサーバーの音楽音量を{volume*100:.0f}%に設定しました", ephemeral=True)
+
+# /playコマンドの音楽再生部分で音量を適用
+# 例:
+# volume = SERVER_MUSIC_VOLUME.get(str(interaction.guild.id), 1.0)
+# audio = discord.FFmpegPCMAudio(url)
+# audio = discord.PCMVolumeTransformer(audio, volume=volume)
+# voice.play(audio)
+
+def get_wav_duration(path):
+    with wave.open(path, 'rb') as wf:
+        frames = wf.getnframes()
+        rate = wf.getframerate()
+        return frames / float(rate)
