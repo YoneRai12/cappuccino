@@ -1959,11 +1959,21 @@ async def tts_command(interaction: discord.Interaction, text: str):
         else:
             voice = interaction.guild.voice_client
         # サーバーごとの音量取得
-        volume = SERVER_MUSIC_VOLUME.get(str(interaction.guild.id), 1.0)
-        # 現在のBGMストリーミングURLを取得（仮: voice.source._source._input）
+        volume = SERVER_MUSIC_VOLUME.get(str(interaction.guild.id), 1.0) * 0.04
+        # 現在のBGMストリーミングURLまたはローカルファイルパスを取得
         bgm_url = None
+        bgm_local_path = None
+        # ストリーミングURL
         if hasattr(voice, 'source') and hasattr(voice.source, '_source') and hasattr(voice.source._source, '_input'):
             bgm_url = voice.source._source._input
+        # ローカルファイル再生中（PCMVolumeTransformer→FFmpegPCMAudio→ファイルパス）
+        elif hasattr(voice, 'source') and hasattr(voice.source, 'original') and hasattr(voice.source.original, 'source'):
+            # discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(path)) の場合
+            bgm_local_path = getattr(voice.source.original, 'source', None)
+        elif hasattr(voice, 'source') and hasattr(voice.source, 'source'):
+            # discord.FFmpegPCMAudio(path) の場合
+            bgm_local_path = getattr(voice.source, 'source', None)
+        # BGM合成処理
         if bgm_url:
             with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as bgm_file:
                 bgm_path = bgm_file.name
@@ -1984,12 +1994,18 @@ async def tts_command(interaction: discord.Interaction, text: str):
                 play_path = mix_path
             else:
                 play_path = tts_path
-        else:
-            play_path = tts_path
+       
         # 再生（サーバーごとの音量を必ず反映）
         try:
+            import asyncio
             if voice.is_playing():
                 voice.stop()
+                await asyncio.sleep(0.5)
+                # まだ再生中なら最大2回まで待つ
+                for _ in range(2):
+                    if not voice.is_playing():
+                        break
+                    await asyncio.sleep(0.5)
             audio = discord.FFmpegPCMAudio(
                 play_path,
                 options='-vn -ar 48000 -ac 2 -b:a 128k'
@@ -2373,8 +2389,8 @@ async def poll_command(interaction: discord.Interaction, question: str, options:
 
 @bot.tree.command(name="play", description="YouTube音楽をストリーミングまたはダウンロード再生")
 @app_commands.describe(
-    stream_url="ストリーミング再生したいYouTubeのURL（左側）",
-    download_url="ダウンロード再生したいYouTubeのURL（右側）"
+    stream_url="ストリーミング（Spotify用）再生したいURL（左側）",
+    download_url="ダウンロード（高音質YouTube用）再生したいURL（右側）"
 )
 async def play_command(interaction: discord.Interaction, stream_url: str = None, download_url: str = None):
     await interaction.response.defer(ephemeral=True)
@@ -2384,6 +2400,8 @@ async def play_command(interaction: discord.Interaction, stream_url: str = None,
         return
     voice_channel = interaction.user.voice.channel
     voice = interaction.guild.voice_client or await voice_channel.connect()
+    # サーバーごとの音量取得
+    volume = SERVER_MUSIC_VOLUME.get(str(interaction.guild.id), 1.0) * 0.04
     # ストリーミング優先
     if stream_url:
         url, title, duration = get_youtube_audio_stream_url(stream_url)
@@ -2391,8 +2409,10 @@ async def play_command(interaction: discord.Interaction, stream_url: str = None,
             await interaction.followup.send("❌ ストリーミングURLの取得に失敗しました。", ephemeral=True)
             return
         try:
+            audio = discord.FFmpegPCMAudio(url)
+            audio = discord.PCMVolumeTransformer(audio, volume=volume)
             voice.play(
-                discord.FFmpegPCMAudio(url),
+                audio,
                 after=lambda e: print(f"ストリーミング再生終了: {e}")
             )
             await interaction.followup.send(f"▶️ ストリーミング再生開始: {title}", ephemeral=True)
@@ -2405,8 +2425,10 @@ async def play_command(interaction: discord.Interaction, stream_url: str = None,
             await interaction.followup.send("❌ ダウンロードに失敗しました。", ephemeral=True)
             return
         try:
+            audio = discord.FFmpegPCMAudio(path)
+            audio = discord.PCMVolumeTransformer(audio, volume=volume)
             voice.play(
-                discord.FFmpegPCMAudio(path),
+                audio,
                 after=lambda e: os.remove(path)
             )
             await interaction.followup.send(f"▶️ ダウンロード再生開始: {title}", ephemeral=True)
@@ -2489,8 +2511,8 @@ from discordbot.youtube_audio import get_youtube_audio_stream_url, download_yout
 
 @bot.tree.command(name="ytplay", description="YouTube音楽をストリーミングまたはダウンロード再生")
 @app_commands.describe(
-    stream_url="ストリーミング再生したいYouTubeのURL（左側）",
-    download_url="ダウンロード再生したいYouTubeのURL（右側）"
+    stream_url="ストリーミング（Spotify用）再生したいURL（左側）",
+    download_url="ダウンロード（高音質YouTube用）再生したいURL（右側）"
 )
 async def ytplay_command(interaction: discord.Interaction, stream_url: str = None, download_url: str = None):
     await interaction.response.defer(ephemeral=True)
@@ -2500,6 +2522,8 @@ async def ytplay_command(interaction: discord.Interaction, stream_url: str = Non
         return
     voice_channel = interaction.user.voice.channel
     voice = interaction.guild.voice_client or await voice_channel.connect()
+    # サーバーごとの音量取得
+    volume = SERVER_MUSIC_VOLUME.get(str(interaction.guild.id), 1.0) * 0.04
     # ストリーミング優先
     if stream_url:
         url, title, duration = get_youtube_audio_stream_url(stream_url)
@@ -2507,8 +2531,10 @@ async def ytplay_command(interaction: discord.Interaction, stream_url: str = Non
             await interaction.followup.send("❌ ストリーミングURLの取得に失敗しました。", ephemeral=True)
             return
         try:
+            audio = discord.FFmpegPCMAudio(url)
+            audio = discord.PCMVolumeTransformer(audio, volume=volume)
             voice.play(
-                discord.FFmpegPCMAudio(url),
+                audio,
                 after=lambda e: print(f"ストリーミング再生終了: {e}")
             )
             await interaction.followup.send(f"▶️ ストリーミング再生開始: {title}", ephemeral=True)
@@ -2521,8 +2547,10 @@ async def ytplay_command(interaction: discord.Interaction, stream_url: str = Non
             await interaction.followup.send("❌ ダウンロードに失敗しました。", ephemeral=True)
             return
         try:
+            audio = discord.FFmpegPCMAudio(path)
+            audio = discord.PCMVolumeTransformer(audio, volume=volume)
             voice.play(
-                discord.FFmpegPCMAudio(path),
+                audio,
                 after=lambda e: os.remove(path)
             )
             await interaction.followup.send(f"▶️ ダウンロード再生開始: {title}", ephemeral=True)
@@ -2569,6 +2597,24 @@ async def music_volume_command(interaction: discord.Interaction, volume: float):
         return
     SERVER_MUSIC_VOLUME[str(interaction.guild.id)] = volume
     save_music_volume()
+    # 再生中のBGMにも即時反映
+    voice = interaction.guild.voice_client
+    if voice and voice.is_playing() and hasattr(voice, 'source'):
+        try:
+            print(f"[DEBUG] voice.source type: {type(voice.source)}")
+            print(f"[DEBUG] voice.source attributes: {dir(voice.source)}")
+            if hasattr(voice.source, 'volume'):
+                print(f"[DEBUG] 変更前 volume: {getattr(voice.source, 'volume', None)}")
+                voice.source.volume = volume
+                print(f"[DEBUG] 変更後 volume: {getattr(voice.source, 'volume', None)}")
+            elif hasattr(voice.source, 'original') and hasattr(voice.source.original, 'volume'):
+                print(f"[DEBUG] original.volume 変更前: {getattr(voice.source.original, 'volume', None)}")
+                voice.source.original.volume = volume
+                print(f"[DEBUG] original.volume 変更後: {getattr(voice.source.original, 'volume', None)}")
+            else:
+                print("[DEBUG] volume属性が見つかりませんでした")
+        except Exception as e:
+            print(f"[DEBUG] 音量変更エラー: {e}")
     await interaction.response.send_message(f"このサーバーの音楽音量を{volume*100:.0f}%に設定しました", ephemeral=True)
 
 # /playコマンドの音楽再生部分で音量を適用
@@ -2583,3 +2629,81 @@ def get_wav_duration(path):
         frames = wf.getnframes()
         rate = wf.getframerate()
         return frames / float(rate)
+
+def reset_all_music_volume_to_default():
+    global SERVER_MUSIC_VOLUME
+    changed = False
+    for gid in list(SERVER_MUSIC_VOLUME.keys()):
+        if SERVER_MUSIC_VOLUME[gid] != 1.0:
+            SERVER_MUSIC_VOLUME[gid] = 1.0
+            changed = True
+    if changed:
+        save_music_volume()
+        print("[INFO] 全サーバーの音楽音量を1.0にリセットしました")
+
+# Bot起動時に自動リセット
+reset_all_music_volume_to_default()
+
+import threading
+import time
+
+tts_mix_buffer = []
+tts_mix_lock = threading.Lock()
+tts_mix_timer = None
+TTS_MIX_BUFFER_TIME = 1.0  # 秒
+
+def start_tts_mix_timer(voice, bgm_local_path, volume):
+    global tts_mix_timer
+    def mix_and_play():
+        time.sleep(TTS_MIX_BUFFER_TIME)
+        with tts_mix_lock:
+            tts_files = tts_mix_buffer.copy()
+            tts_mix_buffer.clear()
+        if not tts_files:
+            return
+        import tempfile
+        import subprocess
+        # TTS音声をamixで合成
+        if len(tts_files) == 1:
+            tts_mix_path = tts_files[0]
+        else:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as mix_file:
+                tts_mix_path = mix_file.name
+            cmd = ['ffmpeg', '-y']
+            for f in tts_files:
+                cmd += ['-i', f]
+            amix_filter = f'amix=inputs={len(tts_files)}:duration=longest:dropout_transition=0'
+            cmd += ['-filter_complex', amix_filter, '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', tts_mix_path]
+            subprocess.run(cmd, check=True)
+        # BGMとTTS合成
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as out_file:
+            out_path = out_file.name
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', bgm_local_path,
+            '-i', tts_mix_path,
+            '-filter_complex', '[0:a]volume=0.5[a0];[a0][1:a]amix=inputs=2:duration=first:dropout_transition=0',
+            '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', out_path
+        ]
+        subprocess.run(cmd, check=True)
+        # 合成音声を再生（BGMは止めず、重ねて流す）
+        try:
+            audio = discord.FFmpegPCMAudio(out_path)
+            audio = discord.PCMVolumeTransformer(audio, volume=volume)
+            voice.play(audio, after=lambda e: cleanup())
+            def cleanup():
+                import os
+                for p in tts_files + [tts_mix_path, out_path]:
+                    try:
+                        os.unlink(p)
+                    except:
+                        pass
+        except Exception as e:
+            print(f"[DEBUG] TTS合成再生エラー: {e}")
+
+    tts_mix_timer = threading.Thread(target=mix_and_play)
+    tts_mix_timer.start()
+
+# TTSコマンド内、ダウンロードBGM再生中の分岐で以下を追加
+# 既存のelif bgm_local_path and os.path.exists(bgm_local_path): の中で
+# TTS音声ファイル（tts_path）をバッファに追加し、タイマーを起動
