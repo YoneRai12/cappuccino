@@ -21,6 +21,7 @@ TTS_USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts_u
 TTS_CHANNELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts_channels.json")
 TTS_JOIN_CHANNELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts_join_channels.json")
 CHARACTER_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "character_settings.json")
+TTS_SPEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts_speed.json")
 
 def _load_tts_users() -> set[int]:
     try:
@@ -73,20 +74,37 @@ def _save_character_settings(settings: dict[int, str]) -> None:
     except Exception as e:
         print(f"キャラクター設定保存失敗: {e}")
 
+def _load_tts_speed() -> dict[int, float]:
+    try:
+        with open(TTS_SPEED_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return {int(k): float(v) for k, v in data.get("users", {}).items()}
+    except Exception:
+        return {}
+
+def _save_tts_speed(settings: dict[int, float]) -> None:
+    try:
+        with open(TTS_SPEED_FILE, "w", encoding="utf-8") as f:
+            json.dump({"users": {str(k): v for k, v in settings.items()}}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"TTS速度設定保存失敗: {e}")
+
 tts_users = _load_tts_users()
 tts_channels = _load_tts_channels()
 character_settings = _load_character_settings()
+tts_speed_settings = _load_tts_speed()
 
 import re
 
 last_message_author = {}
 
-async def async_cleanup(audio_path: str):
+def sync_cleanup(path):
+    import os, time
     try:
-        await asyncio.sleep(0.5)
-        os.unlink(audio_path)
-    except:
-        pass
+        time.sleep(0.5)
+        os.remove(path)
+    except Exception as e:
+        print(f"ファイル削除エラー: {e}")
 
 @bot.event
 async def on_message(message):
@@ -112,7 +130,7 @@ async def on_message(message):
                         character = character_settings.get(user_id, "ずんだもん")
                         zunda_text = f"{message.author.display_name}さん。{clean_text}"
                         last_message_author[cache_key] = message.author.id
-                    wav_bytes = await generate_zunda_voice(zunda_text)
+                    wav_bytes = await generate_zunda_voice(zunda_text, user_id=user_id)
                     if not wav_bytes:
                         return
                     import tempfile
@@ -133,7 +151,7 @@ async def on_message(message):
                     if not voice.is_playing():
                         voice.play(
                             discord.FFmpegPCMAudio(tts_path, options='-vn -ar 48000 -ac 2 -b:a 64k -bufsize 16k'),
-                            after=lambda e: asyncio.create_task(async_cleanup(tts_path))
+                            after=lambda e: sync_cleanup(tts_path)
                         )
             except Exception as e:
                 print(f"TTS自動読み上げエラー: {e}")
@@ -148,10 +166,11 @@ async def on_ready():
     except Exception as e:
         print(f"コマンド同期エラー: {e}")
 
-async def generate_zunda_voice(text: str) -> bytes | None:
+async def generate_zunda_voice(text: str, user_id: int = None) -> bytes | None:
     """VOICEVOXを使用してずんだもんの声を生成（高速化）"""
     try:
         speaker_id = 1
+        speed = tts_speed_settings.get(user_id, 1.0) if user_id else 1.0
         synthesis_response = requests.post(
             f"{VOICEVOX_URL}/audio_query",
             params={"text": text, "speaker": speaker_id},
@@ -162,6 +181,7 @@ async def generate_zunda_voice(text: str) -> bytes | None:
             print(f"VOICEVOX音声合成失敗: {synthesis_response.status_code}")
             return None
         audio_query = synthesis_response.json()
+        audio_query["speedScale"] = speed
         audio_response = requests.post(
             f"{VOICEVOX_URL}/synthesis",
             params={"speaker": speaker_id},
@@ -218,5 +238,23 @@ async def tts_character_command(interaction: discord.Interaction, character: str
     character_settings[user_id] = character
     _save_character_settings(character_settings)
     await interaction.response.send_message(f"✅ あなたのTTSキャラクターを『{character}』に設定しました", ephemeral=True)
+
+@bot.tree.command(name="tts_speed", description="自分のTTS読み上げ速度を設定（0.5〜2.0）")
+async def tts_speed_command(interaction: discord.Interaction, speed: float):
+    if not (0.5 <= speed <= 2.0):
+        await interaction.response.send_message("❌ 速度は0.5〜2.0で指定してください", ephemeral=True)
+        return
+    user_id = interaction.user.id
+    tts_speed_settings[user_id] = speed
+    _save_tts_speed(tts_speed_settings)
+    await interaction.response.send_message(f"✅ あなたのTTS速度を{speed}に設定しました", ephemeral=True)
+
+@bot.tree.command(name="help", description="利用可能なスラッシュコマンド一覧を表示")
+async def help_command(interaction: discord.Interaction):
+    cmds = [
+        f"/{cmd.name} - {cmd.description}" for cmd in bot.tree.get_commands()
+    ]
+    help_text = "\n".join(cmds)
+    await interaction.response.send_message(f"**利用可能なコマンド一覧**\n{help_text}\n\n例: /tts_speed 1.2 で自分の読み上げ速度を変更できます", ephemeral=True)
 
 bot.run(TOKEN) 

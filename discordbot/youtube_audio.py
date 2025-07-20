@@ -5,6 +5,7 @@ import yt_dlp
 import logging
 import uuid
 import subprocess
+from yt_dlp.utils import sanitize_filename
 
 YOUTUBE_AVAILABLE = True
 try:
@@ -18,13 +19,14 @@ logger = logging.getLogger(__name__)
 def convert_to_mp3(input_path, output_path):
     cmd = [
         "ffmpeg", "-y", "-i", input_path,
-        "-vn", "-acodec", "libmp3lame", "-ab", "192k", output_path
+        "-vn", "-acodec", "libmp3lame", "-ab", "96k", output_path
     ]
     subprocess.run(cmd, check=True)
 
 def download_youtube_audio(url: str):
     """YouTubeから音声をダウンロードし、(mp3ファイルパス, タイトル, 再生時間)を返す"""
     if not YOUTUBE_AVAILABLE:
+        print("YOUTUBE_AVAILABLE=False")
         return None, None, None
     try:
         unique_id = uuid.uuid4().hex
@@ -32,37 +34,22 @@ def download_youtube_audio(url: str):
             'format': 'bestaudio/best',
             'outtmpl': f'tmp_{unique_id}_%(title)s.%(ext)s',
             'keepvideo': True,  # 変換前ファイルを残す
+            'preferredquality': '96',
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(url, download=True)  # download=Trueで実際にダウンロード
             title = info.get('title', 'Unknown')
             duration = info.get('duration', 0)
-            ydl.download([url])
-            # 生成されたファイル名を特定
-            base = f'tmp_{unique_id}_{title}'
-            candidates = [f"{base}.webm", f"{base}.m4a", f"{base}.opus"]
-            input_file = None
-            for fname in candidates:
-                if os.path.exists(fname):
-                    # ファイルサイズが安定するまで待つ
-                    last_size = -1
-                    for _ in range(30):
-                        try:
-                            size = os.path.getsize(fname)
-                            if size == last_size:
-                                break
-                            last_size = size
-                        except Exception:
-                            pass
-                        time.sleep(0.2)
-                    input_file = fname
-                    break
-            if input_file:
+            input_file = ydl.prepare_filename(info)
+            print(f"実際のダウンロードファイル: {input_file} 存在: {os.path.exists(input_file)}")
+            if input_file and os.path.exists(input_file):
+                base, _ = os.path.splitext(input_file)
                 mp3_file = f"{base}.mp3"
                 try:
                     convert_to_mp3(input_file, mp3_file)
                 except Exception as e:
                     logger.error(f"ffmpeg変換エラー: {e}")
+                    print(f"ffmpeg変換エラー: {e}")
                     return None, None, None
                 # 変換後のmp3ファイルが使えるまで待つ
                 for _ in range(30):
@@ -71,11 +58,17 @@ def download_youtube_audio(url: str):
                             break
                     except PermissionError:
                         time.sleep(0.2)
+                print(f"mp3_file: {mp3_file} 存在: {os.path.exists(mp3_file)}")
+                if not os.path.exists(mp3_file):
+                    print(f"mp3ファイルが見つかりません: {mp3_file}")
+                    return None, None, None
                 return mp3_file, title, duration
             else:
+                print("input_fileが見つかりません")
                 return None, None, None
     except Exception as e:
         logger.error(f"YouTube音声ダウンロードエラー: {e}")
+        print(f"YouTube音声ダウンロードエラー: {e}")
         return None, None, None
 
 def get_youtube_audio_stream_url(url: str):
@@ -110,7 +103,7 @@ def save_streaming_bgm_segment(stream_url: str, duration: float, output_path: st
         cmd = [
             "ffmpeg", "-y", "-i", stream_url,
             "-t", str(duration),
-            "-vn", "-acodec", "pcm_s16le", "-ar", "48000", "-ac", "2", output_path
+            "-vn", "-acodec", "pcm_s16le", "-ar", "48000", "-ac", "2", "-b:a", "96k", output_path
         ]
         subprocess.run(cmd, check=True)
         return True

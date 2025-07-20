@@ -465,9 +465,11 @@ async def handle_agent_request(message: discord.Message, user_text: str):
 
 # ───────────────── Discordイベントハンドラ ─────────────────
 @bot.event
-async def on_message(message: discord.Message):
-    global is_generating_image, image_generating_channel_id
-    if message.author == bot.user:
+async def on_message(message):
+    if message.author.bot or not message.guild:
+        return
+    # TTS専用BOTがいる場合はTTSをスキップ
+    if should_skip_tts(message.guild):
         return
     # 画像生成中に@メンションやコマンドが来た場合
     if is_generating_image and (bot.user in message.mentions or message.content.startswith("y!")):
@@ -2335,10 +2337,10 @@ async def flag_command(interaction: discord.Interaction, emoji: str):
 async def translate_command(interaction: discord.Interaction, text: str, target_lang: str = "en"):
     """翻訳コマンド"""
     try:
-        # 翻訳処理（簡易版）
-        translated_text = f"[{target_lang.upper()}] {text}"
-        await interaction.response.send_message(f"🌐 **翻訳結果**: {translated_text}")
-        
+        # 本物の翻訳APIを使う場合はここで翻訳処理
+        # ここではダミーで「text」をそのまま返す（例: Google翻訳API等に置き換え可）
+        translated_text = text  # ここを本物の翻訳結果に置き換えてOK
+        await interaction.response.send_message(translated_text)
     except Exception as e:
         logger.error(f"Translate command error: {e}")
         await interaction.response.send_message(f"❌ 翻訳に失敗しました: {e}")
@@ -2394,87 +2396,70 @@ async def poll_command(interaction: discord.Interaction, question: str, options:
 )
 async def play_command(interaction: discord.Interaction, stream_url: str = None, download_url: str = None):
     await interaction.response.defer(ephemeral=True)
-    # VCにいるかチェック
     if not interaction.user.voice or not interaction.user.voice.channel:
         await interaction.followup.send("❌ VCに参加してから使用してください。", ephemeral=True)
         return
     voice_channel = interaction.user.voice.channel
     voice = interaction.guild.voice_client or await voice_channel.connect()
-    # サーバーごとの音量取得
+    # VC情報を記憶
+    LAST_VOICE_CHANNEL[interaction.guild.id] = voice_channel
     volume = SERVER_MUSIC_VOLUME.get(str(interaction.guild.id), 1.0) * 0.04
-    # ストリーミング優先
+    gid = interaction.guild.id
+    queue = MUSIC_QUEUE.setdefault(gid, deque())
+    added = False
     if stream_url:
         url, title, duration = get_youtube_audio_stream_url(stream_url)
         if not url:
             await interaction.followup.send("❌ ストリーミングURLの取得に失敗しました。", ephemeral=True)
             return
-        try:
-            audio = discord.FFmpegPCMAudio(url)
-            audio = discord.PCMVolumeTransformer(audio, volume=volume)
-            voice.play(
-                audio,
-                after=lambda e: print(f"ストリーミング再生終了: {e}")
-            )
-            await interaction.followup.send(f"▶️ ストリーミング再生開始: {title}", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ ストリーミング再生に失敗: {e}", ephemeral=True)
-        return
+        queue.append({"kind": "stream", "src": url, "vol": volume, "title": title})
+        await interaction.followup.send(f"▶️ キューに追加: {title}", ephemeral=True)
+        added = True
     elif download_url:
         path, title, duration = download_youtube_audio(download_url)
         if not path:
             await interaction.followup.send("❌ ダウンロードに失敗しました。", ephemeral=True)
             return
-        try:
-            audio = discord.FFmpegPCMAudio(path)
-            audio = discord.PCMVolumeTransformer(audio, volume=volume)
-            voice.play(
-                audio,
-                after=lambda e: os.remove(path)
-            )
-            await interaction.followup.send(f"▶️ ダウンロード再生開始: {title}", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ ダウンロード再生に失敗: {e}", ephemeral=True)
-        return
+        queue.append({"kind": "download", "src": path, "vol": volume, "title": title})
+        await interaction.followup.send(f"▶️ キューに追加: {title}", ephemeral=True)
+        added = True
     else:
         await interaction.followup.send("URLを入力してください（どちらか一方でOK）", ephemeral=True)
+        return
+    if added and not voice.is_playing():
+        await play_next_in_queue(interaction.guild)
 
 @bot.tree.command(name="stop", description="⏹️ 音楽再生を停止")
 async def stop_command(interaction: discord.Interaction):
-    """音楽再生を停止"""
     if not interaction.guild.voice_client:
         await interaction.response.send_message("❌ 現在音楽を再生していません。", ephemeral=True)
         return
-    
     try:
         interaction.guild.voice_client.stop()
         await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("⏹️ 音楽再生を停止しました。", ephemeral=True)
+        await interaction.response.send_message(f"⏹️ 音楽再生を{interaction.user.display_name}さんが停止しました。", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ 停止に失敗しました: {e}", ephemeral=True)
 
 @bot.tree.command(name="pause", description="⏸️ 音楽再生を一時停止")
 async def pause_command(interaction: discord.Interaction):
-    """音楽再生を一時停止"""
     if not interaction.guild.voice_client or not interaction.guild.voice_client.is_playing():
         await interaction.response.send_message("❌ 現在音楽を再生していません。", ephemeral=True)
         return
-    
     try:
         interaction.guild.voice_client.pause()
-        await interaction.response.send_message("⏸️ 音楽再生を一時停止しました。", ephemeral=True)
+        await interaction.response.send_message(f"⏸️ 音楽再生を{interaction.user.display_name}さんが一時停止しました。", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ 一時停止に失敗しました: {e}", ephemeral=True)
 
 @bot.tree.command(name="resume", description="▶️ 音楽再生を再開")
 async def resume_command(interaction: discord.Interaction):
-    """音楽再生を再開"""
     if not interaction.guild.voice_client or not interaction.guild.voice_client.is_paused():
         await interaction.response.send_message("❌ 現在一時停止していません。", ephemeral=True)
         return
-    
     try:
         interaction.guild.voice_client.resume()
-        await interaction.response.send_message("▶️ 音楽再生を再開しました。", ephemeral=True)
+        await interaction.response.send_message(f"▶️ 音楽再生を{interaction.user.display_name}さんが再開しました。", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ 再開に失敗しました: {e}", ephemeral=True)
 
@@ -2707,3 +2692,115 @@ def start_tts_mix_timer(voice, bgm_local_path, volume):
 # TTSコマンド内、ダウンロードBGM再生中の分岐で以下を追加
 # 既存のelif bgm_local_path and os.path.exists(bgm_local_path): の中で
 # TTS音声ファイル（tts_path）をバッファに追加し、タイマーを起動
+
+# サーバーごとのリピート状態と直近の再生情報を管理
+REPEAT_STATUS = {}
+LAST_PLAYED = {}
+
+@bot.tree.command(name="repeat", description="現在の曲をリピート再生 ON/OFF")
+async def repeat_command(interaction: discord.Interaction):
+    gid = interaction.guild.id
+    now = REPEAT_STATUS.get(gid, False)
+    REPEAT_STATUS[gid] = not now
+    msg = "🔁 リピート再生ON" if not now else "⏹️ リピート再生OFF"
+    await interaction.response.send_message(msg, ephemeral=True)
+
+# TTS専用BotのユーザーID（例: .envやconfigで指定してもOK）
+TTS_BOT_IDS = [
+    1396016123102630033
+]
+
+# on_messageやTTS再生処理の前で、音楽再生中またはTTS専用Botが同じVCにいる場合はTTSをスキップ
+async def should_skip_tts(guild):
+    # 音楽BotがVCで再生中ならTTS禁止
+    voice = guild.voice_client
+    if voice and voice.is_playing():
+        return True
+    # TTS専用Botが同じVCにいる場合もTTS禁止
+    if voice and voice.channel:
+        for member in voice.channel.members:
+            if member.id in TTS_BOT_IDS:
+                return True
+    return False
+
+# TTS再生処理の前で
+# if await should_skip_tts(message.guild):
+#     return
+# ...既存のTTS再生処理...
+
+from collections import deque
+MUSIC_QUEUE = {}
+REPEAT_STATUS = {}
+LAST_VOICE_CHANNEL = {}
+
+@bot.tree.command(name="queue", description="現在の音楽再生キューを表示")
+async def queue_command(interaction: discord.Interaction):
+    gid = interaction.guild.id
+    queue = MUSIC_QUEUE.get(gid, deque())
+    if not queue:
+        await interaction.response.send_message("🎵 再生キューは空です。", ephemeral=True)
+    else:
+        msg = "\n".join([f"{i+1}. {item['title']}" for i, item in enumerate(queue)])
+        await interaction.response.send_message(f"🎵 現在の再生キュー:\n{msg}", ephemeral=True)
+
+async def play_next_in_queue(guild):
+    gid = guild.id
+    queue = MUSIC_QUEUE.get(gid)
+    print(f"play_next_in_queue: キュー長={len(queue) if queue else 0}")
+    voice = guild.voice_client
+    print(f"voice: {voice}, is_connected: {voice.is_connected() if voice else None}, is_playing: {voice.is_playing() if voice else None}")
+    if not queue or not len(queue):
+        if gid in MUSIC_QUEUE:
+            del MUSIC_QUEUE[gid]
+        return
+    item = queue.popleft()
+    # VC切断時は直前にキューに積んだ人のVCに再接続
+    if not voice or not voice.is_connected():
+        vc_channel = LAST_VOICE_CHANNEL.get(gid)
+        if vc_channel:
+            print(f"voiceが切断されているため再接続: {vc_channel}")
+            voice = await vc_channel.connect()
+        else:
+            print("voiceが切断されていて再接続先が不明")
+            return
+    kind, src, vol, title = item['kind'], item['src'], item['vol'], item['title']
+    def after_play(e):
+        try:
+            if REPEAT_STATUS.get(gid, False):
+                queue.appendleft(item)
+            asyncio.run_coroutine_threadsafe(play_next_in_queue(guild), bot.loop)
+        except Exception as err:
+            print(f"after_playエラー: {err}")
+        if kind == "download" and src and os.path.exists(src):
+            try:
+                os.remove(src)
+            except:
+                pass
+    try:
+        audio = discord.FFmpegPCMAudio(src)
+        audio = discord.PCMVolumeTransformer(audio, volume=vol)
+        voice.play(audio, after=after_play)
+    except Exception as err:
+        print(f"キュー再生失敗: {err}")
+        try:
+            asyncio.run_coroutine_threadsafe(play_next_in_queue(guild), bot.loop)
+        except Exception as err2:
+            print(f"after_playエラー: {err2}")
+
+@bot.tree.command(name="queue_clear", description="音楽再生キューを全て削除")
+async def queue_clear_command(interaction: discord.Interaction):
+    gid = interaction.guild.id
+    if gid in MUSIC_QUEUE:
+        MUSIC_QUEUE[gid].clear()
+        await interaction.response.send_message("🗑️ 再生キューを全て削除しました。", ephemeral=True)
+    else:
+        await interaction.response.send_message("再生キューは空です。", ephemeral=True)
+
+@bot.tree.command(name="skip", description="現在再生中の曲をスキップ")
+async def skip_command(interaction: discord.Interaction):
+    voice = interaction.guild.voice_client
+    if not voice or not voice.is_playing():
+        await interaction.response.send_message("❌ 現在再生中の曲はありません。", ephemeral=True)
+        return
+    voice.stop()
+    await interaction.response.send_message("⏭️ 曲をスキップしました。", ephemeral=True)
