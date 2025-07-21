@@ -111,6 +111,7 @@ async def on_message(message):
     if message.author.bot or not message.guild:
         return
     guild_id = message.guild.id
+    user_id = message.author.id  # ここで必ず定義
     if guild_id in joined_text_channels:
         text_channel_id, voice = joined_text_channels[guild_id]
         if message.channel.id == text_channel_id:
@@ -126,7 +127,6 @@ async def on_message(message):
                     if cache_key in last_message_author and last_message_author[cache_key] == message.author.id:
                         zunda_text = clean_text
                     else:
-                        user_id = message.author.id
                         character = character_settings.get(user_id, "ずんだもん")
                         zunda_text = f"{message.author.display_name}さん。{clean_text}"
                         last_message_author[cache_key] = message.author.id
