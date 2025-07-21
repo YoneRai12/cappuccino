@@ -32,6 +32,10 @@ from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 from dataclasses import dataclass
 from typing import Any
+import pycountry
+# from googletrans import Translator, LANGUAGES  # ←不要なので削除
+import openai
+import requests
 
 # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 # ★★★ これが最重要の修正点です ★★★
@@ -419,7 +423,23 @@ async def handle_agent_request(message: discord.Message, user_text: str):
         full_prompt = "\n".join([f"{m.author.display_name}: {m.content}" for m in history if m.content])
         full_prompt += f"\n{message.author.display_name}: {user_text}"
         print("cappuccino_agent.run呼び出し直前")
-        result = await cappuccino_agent.run(full_prompt)
+        
+        # タイムアウト処理を追加
+        try:
+            async with asyncio.timeout(30):
+                result = await cappuccino_agent.run(full_prompt)
+        except asyncio.TimeoutError:
+            # タイムアウト時にVRAMをクリア
+            await reply.edit(content="🔄 応答がタイムアウトしました。VRAMをクリアして再試行します...")
+            await vram_clear_task()
+            # 再度リクエストを試行
+            try:
+                async with asyncio.timeout(30):
+                    result = await cappuccino_agent.run(full_prompt)
+            except asyncio.TimeoutError:
+                await reply.edit(content="❌ 申し訳ありませんが、再試行後もタイムアウトしました。後でもう一度お試しください。")
+                return
+        
         print("cappuccino_agent.run呼び出し直後")
         logger.info(f"エージェントからの最終回答: {result}")
 
@@ -463,13 +483,22 @@ async def handle_agent_request(message: discord.Message, user_text: str):
         logger.error(f"handle_agent_requestでエラー: {exc}", exc_info=True)
         await reply.edit(content=f"申し訳ありません、エラーが発生しました: {exc}")
 
+async def vram_clear_task():
+    try:
+        from docker_tools import nvidia_smi_clear_memory
+        result = nvidia_smi_clear_memory()
+        logging.info(f"[VRAM自動開放] 結果: {result}")
+    except Exception as e:
+        logging.error(f"[VRAM自動開放] エラー: {e}")
+
 # ───────────────── Discordイベントハンドラ ─────────────────
 @bot.event
 async def on_message(message):
+    print(f"[on_message] content: {message.content} | author: {message.author} | mentions: {message.mentions}")
     if message.author.bot or not message.guild:
         return
     # TTS専用BOTがいる場合はTTSをスキップ
-    if should_skip_tts(message.guild):
+    if await should_skip_tts(message.guild):
         return
     # 画像生成中に@メンションやコマンドが来た場合
     if is_generating_image and (bot.user in message.mentions or message.content.startswith("y!")):
@@ -1825,65 +1854,47 @@ async def userinfo_command(interaction: discord.Interaction, user: discord.Membe
         logger.error(f"Userinfo command error: {e}")
         await interaction.response.send_message(f"❌ ユーザー情報の取得に失敗しました: {e}")
 
+import discord
+from collections import defaultdict
+
+CATEGORY_MAP = [
+    ("🎨 画像・AI", ["画像", "image", "heavy", "ai"]),
+    ("📰 情報・ニュース", ["天気", "ニュース", "地震"]),
+    ("⚙️ 設定", ["設定"]),
+    ("🛠️ ユーティリティ", ["poker", "qr", "barcode", "tex", "dice", "userinfo"]),
+    ("🎵 音楽", ["play", "ytplay", "stop", "pause", "resume", "music_volume", "queue", "skip", "repeat"]),
+    ("🎤 TTS", ["tts", "join", "leave", "tts_on", "tts_off", "tts_status", "tts_speed", "tts_voice", "tts_character", "tts_character_status"]),
+    ("🖥️ GPU監視", ["gpu", "gpumemory", "gpuprocesses"]),
+    ("🌐 その他", []),
+]
+
+def get_category(cmd_name):
+    for cat, keywords in CATEGORY_MAP:
+        for kw in keywords:
+            if cmd_name.startswith(kw):
+                return cat
+    return "🌐 その他"
+
 @bot.tree.command(name="help", description="🤖 利用可能なコマンド一覧を表示")
 async def help_command(interaction: discord.Interaction):
-    """ヘルプコマンド"""
+    from collections import defaultdict
+    category_cmds = defaultdict(list)
+    for cmd in bot.tree.get_commands():
+        cat = get_category(cmd.name)
+        category_cmds[cat].append(f"/{cmd.name} - {cmd.description}")
     embed = discord.Embed(
         title="🤖 ボットコマンド一覧",
         description="利用可能なスラッシュコマンドとテキストコマンド",
         color=discord.Color.blue()
     )
-    
-    # 画像・AI関連
-    embed.add_field(
-        name="🎨 画像・AI",
-        value="• `/画像生成` - 画像生成\n"
-              "• `@ボット 質問` - AI質問\n"
-              "• `r? 質問` - AI質問",
-        inline=False
-    )
-    
-    # 情報・ニュース
-    embed.add_field(
-        name="📰 情報・ニュース",
-        value="• `/天気` - 天気情報\n"
-              "• `/ニュース` - 最新ニュース\n"
-              "• `/地震情報` - 地震情報",
-        inline=False
-    )
-    
-    # 設定
-    embed.add_field(
-        name="⚙️ 設定",
-        value="• `/ニュース設定` - ニュース配信設定\n"
-              "• `/天気設定` - 天気配信設定\n"
-              "• `/地震設定` - 地震情報設定",
-        inline=False
-    )
-    
-    # ユーティリティ
-    embed.add_field(
-        name="🛠️ ユーティリティ",
-        value="• `/poker` - ポーカーゲーム\n"
-              "• `/qr` - QRコード生成\n"
-              "• `/barcode` - バーコード生成\n"
-              "• `/tex` - TeX数式変換\n"
-              "• `/dice` - ダイスロール\n"
-              "• `/userinfo` - ユーザー情報",
-        inline=False
-    )
-    
-    # GPU監視
-    embed.add_field(
-        name="🖥️ GPU監視",
-        value="• `/gpu` - GPU使用率\n"
-              "• `/gpumemory` - GPUメモリ使用量\n"
-              "• `/gpuprocesses` - GPUプロセス",
-        inline=False
-    )
-    
+    for cat, _ in CATEGORY_MAP:
+        if category_cmds[cat]:
+            embed.add_field(
+                name=cat,
+                value="\n".join(category_cmds[cat]),
+                inline=False
+            )
     embed.set_footer(text="詳細は各コマンドの説明を参照してください")
-    
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="ping", description="🏓 ボットの応答時間を測定")
@@ -2318,29 +2329,48 @@ async def flag_command(interaction: discord.Interaction, emoji: str):
         if not country_code:
             await interaction.response.send_message("❌ 有効な国旗絵文字を入力してください")
             return
-        
         # 国名を取得
         country_name = get_country_name(country_code)
         if not country_name:
             await interaction.response.send_message(f"❌ 国名が見つかりませんでした: {country_code}")
             return
-        
-        await interaction.response.send_message(f"🏁 {emoji} → {country_name} ({country_code.upper()})")
-        
+        await interaction.response.send_message(f"{country_name} ({country_code.upper()})")
     except Exception as e:
         logger.error(f"Flag command error: {e}")
         await interaction.response.send_message(f"❌ 国旗翻訳に失敗しました: {e}")
 
 
+def llama_translate(text, target_lang):
+    prompt = f"Translate the following text to {target_lang}:\n{text}"
+    response = requests.post(
+        "http://localhost:11434/api/generate",
+        json={"model": "llama3.1:latestLM", "prompt": prompt}
+    )
+    result = response.json()
+    return result["response"].strip()
+
+def get_lang_name(lang_code):
+    lang_map = {
+        "en": "English",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "zh": "Chinese",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+        "it": "Italian",
+        "ru": "Russian",
+        # 必要に応じて追加
+    }
+    return lang_map.get(lang_code.lower(), lang_code)
+
 @bot.tree.command(name="translate", description="🌐 メッセージを翻訳")
 @app_commands.describe(text="翻訳するテキスト", target_lang="翻訳先言語（例: en, ja, ko）")
 async def translate_command(interaction: discord.Interaction, text: str, target_lang: str = "en"):
-    """翻訳コマンド"""
     try:
-        # 本物の翻訳APIを使う場合はここで翻訳処理
-        # ここではダミーで「text」をそのまま返す（例: Google翻訳API等に置き換え可）
-        translated_text = text  # ここを本物の翻訳結果に置き換えてOK
-        await interaction.response.send_message(translated_text)
+        translated = llama_translate(text, target_lang)
+        lang_name = get_lang_name(target_lang)
+        await interaction.response.send_message(f"💬 {lang_name} translation:\n{translated}")
     except Exception as e:
         logger.error(f"Translate command error: {e}")
         await interaction.response.send_message(f"❌ 翻訳に失敗しました: {e}")
@@ -2804,3 +2834,10 @@ async def skip_command(interaction: discord.Interaction):
         return
     voice.stop()
     await interaction.response.send_message("⏭️ 曲をスキップしました。", ephemeral=True)
+
+def get_country_name(country_code):
+    try:
+        country = pycountry.countries.get(alpha_2=country_code.upper())
+        return country.name if country else None
+    except Exception:
+        return None
