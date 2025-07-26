@@ -37,6 +37,37 @@ import pycountry
 import openai
 import requests
 
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+def parse_seek_time(text: str) -> int:
+    """Convert seek time expressions like ``"1m30s"`` or ``"1:02:03"`` to seconds."""
+
+    text = text.strip()
+    if not text:
+        raise ValueError("empty time string")
+
+    match = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", text)
+    if match and any(match.groups()):
+        h = int(match.group(1) or 0)
+        m = int(match.group(2) or 0)
+        s = int(match.group(3) or 0)
+        return h * 3600 + m * 60 + s
+
+    if re.fullmatch(r"\d+:\d{2}(?::\d{2})?", text):
+        parts = list(map(int, text.split(":")))
+        if len(parts) == 2:
+            m, s = parts
+            return m * 60 + s
+        if len(parts) == 3:
+            h, m, s = parts
+            return h * 3600 + m * 60 + s
+
+    if text.isdigit():
+        return int(text)
+
+    raise ValueError(f"invalid seek time: {text}")
+
 # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 # ★★★ これが最重要の修正点です ★★★
 #
