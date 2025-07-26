@@ -204,7 +204,7 @@ class DiscordManager:
         
         return events
     
-    async def send_message(self, channel_id: int, content: str, 
+    async def send_message(self, channel_id: int, content: str,
                           embed: Optional[discord.Embed] = None) -> Dict[str, Any]:
         """
         Send a message to a Discord channel.
@@ -233,6 +233,28 @@ class DiscordManager:
             
         except Exception as e:
             logger.error(f"Failed to send message: {e}")
+            return {"error": str(e)}
+
+    async def send_file(self, channel_id: int, file_path: str,
+                        content: str = "",
+                        embed: Optional[discord.Embed] = None) -> Dict[str, Any]:
+        """Send a file to a Discord channel."""
+        try:
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                return {"error": f"Channel {channel_id} not found"}
+
+            file = discord.File(file_path)
+            message = await channel.send(content=content, embed=embed, file=file)
+
+            return {
+                "success": True,
+                "message_id": message.id,
+                "channel_id": channel_id,
+                "file_path": file_path,
+            }
+        except Exception as e:
+            logger.error(f"Failed to send file: {e}")
             return {"error": str(e)}
     
     async def get_channel_messages(self, channel_id: int, 

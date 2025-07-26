@@ -216,3 +216,24 @@ async def test_media_describe_video(monkeypatch):
     result = await tm.media_describe_video("video.mp4")
     assert result["avg_color"] == [1.0, 2.0, 3.0]
 
+
+@pytest.mark.asyncio
+async def test_capture_screenshot(tmp_path, monkeypatch):
+    tm = ToolManager(db_path=":memory:")
+
+    import types
+    import sys
+
+    class DummyImage:
+        def save(self, path):
+            with open(path, "wb") as f:
+                f.write(b"data")
+
+    dummy_mod = types.SimpleNamespace(screenshot=lambda: DummyImage())
+    monkeypatch.setitem(sys.modules, "pyautogui", dummy_mod)
+
+    out_path = tmp_path / "shot.png"
+    result = await tm.capture_screenshot(str(out_path))
+    assert result == str(out_path)
+    assert out_path.exists()
+

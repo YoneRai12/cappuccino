@@ -73,3 +73,7 @@ generated images locally:
 ```bash
 python agent_cli.py "青い空と白い雲の風景画"
 ```
+
+## Screenshot tool
+`capture_screenshot` saves the current screen to a PNG file. Combine it with
+`DiscordManager.send_file` to share images in chat.

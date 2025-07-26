@@ -17,6 +17,7 @@ class ToolManager:
             "generate_image": self.generate_image,
             "simple_math": self.simple_math,
             "get_current_time": self.get_current_time,
+            "capture_screenshot": self.capture_screenshot,
         }
         self._agent = None  # 必要に応じてセット
 
@@ -65,6 +66,30 @@ class ToolManager:
         import datetime
         now = datetime.datetime.now()
         return f"現在の日時は {now.strftime('%Y-%m-%d %H:%M:%S')} です。"
+
+    async def capture_screenshot(self, output_path: str | None = None) -> str:
+        """Capture a screenshot of the current screen and save to a file."""
+        try:
+            import os
+            import tempfile
+            import pyautogui
+
+            if output_path is None:
+                fd, path = tempfile.mkstemp(suffix=".png")
+                os.close(fd)
+                output_path = path
+
+            loop = asyncio.get_running_loop()
+
+            def _capture(path: str) -> None:
+                img = pyautogui.screenshot()
+                img.save(path)
+
+            await loop.run_in_executor(None, _capture, output_path)
+            return output_path
+        except Exception as e:
+            logging.error(f"capture_screenshot error: {e}")
+            return f"エラー: スクリーンショットの取得に失敗しました - {e}"
 
     async def get_tools_schema(self) -> List[Dict[str, Any]]:
         return [
@@ -120,6 +145,18 @@ class ToolManager:
                 "function": {
                     "name": "get_current_time",
                     "description": "現在の日時を返します。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "capture_screenshot",
+                    "description": "現在の画面をキャプチャして画像ファイルとして保存します。",
                     "parameters": {
                         "type": "object",
                         "properties": {},
