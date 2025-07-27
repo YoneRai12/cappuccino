@@ -1,0 +1,52 @@
+# セットアップ手順 (日本語)
+
+このドキュメントでは Cappuccino をローカル環境で起動するまでの基本的な流れを説明します。
+
+## 1. Python 仮想環境の作成
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Windows 環境の場合は `Scripts\activate` を実行してください。
+
+## 2. 依存パッケージのインストール
+
+```bash
+pip install -r requirements.txt
+```
+
+## 3. `.env` の作成と編集
+
+```bash
+cp .env.example .env
+```
+
+`.env` ファイル内に API キーやトークンを入力します。
+
+- `OPENAI_API_KEY`: OpenAI API を利用する際のキー
+- `LOCAL_MODEL_PATH`: ローカル LLM モデルのディレクトリ (任意)
+- `DISCORD_BOT_TOKEN`: Discord ボット用トークン
+
+## 4. サーバの起動
+
+FastAPI サーバを起動するには次のコマンドを実行します。
+
+```bash
+uvicorn api:app --reload
+```
+
+API と Discord ボットを同時に動かしたい場合は以下を使います。
+
+```bash
+python run_server_bot.py
+```
+
+## 5. テストの実行
+
+```bash
+pytest -q
+```
+
+`DISCORD_BOT_TOKEN` などが設定されていない場合、いくつかのテストはスキップされます。
