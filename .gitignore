@@ -22,3 +22,4 @@ logs/
 tmp_*
 *.wav
 *.mp3
+.env

@@ -17,5 +17,10 @@ class Settings:
     azure_openai_key: str | None = os.getenv("AZURE_OPENAI_API_KEY")
     fractal_depth: int = int(os.getenv("FRACTAL_DEPTH", "2"))
     fractal_breadth: int = int(os.getenv("FRACTAL_BREADTH", "3"))
+    stable_diffusion_url: str = os.getenv("STABLE_DIFFUSION_URL", "http://localhost:7860")
+    stable_diffusion_api_key: str = os.getenv("STABLE_DIFFUSION_API_KEY", "")
+    openweather_api_key: str = os.getenv("OPENWEATHER_API_KEY", "")
+    discord_bot_token: str = os.getenv("DISCORD_BOT_TOKEN", "")
+    discord_token: str = os.getenv("DISCORD_TOKEN", "")
 
 settings = Settings()

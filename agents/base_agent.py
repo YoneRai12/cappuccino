@@ -6,8 +6,9 @@ from typing import List, Dict, Optional
 
 class BaseAgent:
     def __init__(self, api_key: Optional[str], api_base: Optional[str], model: str, system_prompt: str):
-        self.api_key = os.getenv("OPENAI_API_KEY", api_key or "")
-        self.api_base = os.getenv("OPENAI_API_BASE", api_base or "")
+        from config import settings
+        self.api_key = api_key or settings.openai_api_key
+        self.api_base = api_base or (settings.openai_api_base or "")
         self.model = model
         self.system_prompt = system_prompt
         
