@@ -10,7 +10,7 @@ try:
 except ImportError:
     DiscordManager = None
 import logging
-import os
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ def _ensure_discord_manager():
     """Ensure Discord manager is initialized."""
     global discord_manager
     if discord_manager is None:
-        bot_token = os.getenv('DISCORD_BOT_TOKEN')
+        bot_token = settings.discord_bot_token
         if not bot_token:
             raise ValueError("DISCORD_BOT_TOKEN environment variable not set")
         discord_manager = DiscordManager(bot_token)
