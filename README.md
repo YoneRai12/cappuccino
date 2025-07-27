@@ -3,12 +3,25 @@
 Cappuccino aims to be a general‑purpose AI assistant. The project follows the design guidelines in `AGENTS.md` which emphasize high quality code, modular architecture and robust asynchronous tooling. Tools are intended to run concurrently and the API is exposed through FastAPI for easy humanoid integration.
 
 ## Setup
-1. Create a Python environment (Python 3.12 or later recommended).
-2. Install dependencies:
+1. Clone this repository and move into the directory:
    ```bash
-   pip install -r requirements.txt
+   git clone <repo-url>
+   cd cappuccino
    ```
-3. Copy `.env.example` to `.env` and add your API keys.
+2. Create a Python environment (Python 3.12 or later recommended):
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   ```
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+If you pull new changes and encounter "No module named pycountry", run the above
+command again to install any new dependencies.
+4. Copy `.env.example` to `.env` and set the tokens. Leave `OPENAI_API_KEY` empty and set `LOCAL_MODEL_PATH` to your LLaMA model directory if you want to run without OpenAI.
+
+For Japanese setup instructions see [docs/SETUP_JA.md](docs/SETUP_JA.md).
 
 ## Running the server
 Start the FastAPI server with:
@@ -48,7 +61,8 @@ pytest -q
 The integration script `test_integration.py` exercises Docker and Discord
 features. It requires a running Docker daemon and a valid `DISCORD_BOT_TOKEN`
 environment variable in order to fully execute. If these requirements are
-missing, the integration tests are skipped while the other unit tests still run.
+missing, set a dummy token such as `DISCORD_BOT_TOKEN='dummy'` so tests can
+proceed (some will still be skipped).
 
 ## Design philosophy
 Key principles from `AGENTS.md`:
