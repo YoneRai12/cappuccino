@@ -10,6 +10,8 @@ Cappuccino aims to be a general‑purpose AI assistant. The project follows the 
    ```
 3. Copy `.env.example` to `.env` and add your API keys.
 
+For Japanese setup instructions see [docs/SETUP_JA.md](docs/SETUP_JA.md).
+
 ## Running the server
 Start the FastAPI server with:
 ```bash
