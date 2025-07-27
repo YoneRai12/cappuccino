@@ -37,7 +37,14 @@ from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 from dataclasses import dataclass
 from typing import Any
-import pycountry
+
+try:
+    import pycountry
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    pycountry = None
+    logging.warning(
+        "pycountry is not installed. Install it with 'pip install pycountry'"
+    )
 # from googletrans import Translator, LANGUAGES  # ←不要なので削除
 import openai
 import requests
@@ -2875,6 +2882,8 @@ async def skip_command(interaction: discord.Interaction):
     await interaction.response.send_message("⏭️ 曲をスキップしました。", ephemeral=True)
 
 def get_country_name(country_code):
+    if pycountry is None:
+        return None
     try:
         country = pycountry.countries.get(alpha_2=country_code.upper())
         return country.name if country else None
