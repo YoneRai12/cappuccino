@@ -23,3 +23,4 @@ tmp_*
 *.wav
 *.mp3
 .env
+__pycache__/

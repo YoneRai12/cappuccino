@@ -2,6 +2,7 @@
 import logging
 from typing import List, Dict, Optional
 
+import os
 from config import settings
 from local_llm import LocalLLM
 
@@ -17,13 +18,24 @@ class BaseAgent:
         self.model = model
         self.system_prompt = system_prompt
 
-        logging.info(f"エージェント初期化中... Model: {self.model}, Role: '{self.system_prompt[:30]}...'")
+        logging.info(
+            f"エージェント初期化中... Model: {self.model}, Role: '{self.system_prompt[:30]}...'"
+        )
 
-        if settings.local_model_path:
-            self.llm_client = LocalLLM(settings.local_model_path)
+        use_local = bool(settings.local_model_path) or not settings.openai_api_key
+        if use_local:
+            model_path = settings.local_model_path
+            if not model_path:
+                raise RuntimeError(
+                    "OPENAI_API_KEY が設定されていないため LOCAL_MODEL_PATH の指定が必要です"
+                )
+            logging.info(f"ローカルモデルを使用します: {model_path}")
+            self.llm_client = LocalLLM(model_path)
         else:
             if AsyncOpenAI is None:
-                raise RuntimeError("OpenAI client unavailable and LOCAL_MODEL_PATH not set")
+                raise RuntimeError(
+                    "OpenAI client unavailable and LOCAL_MODEL_PATH not set"
+                )
             self.llm_client = AsyncOpenAI(api_key=self.api_key, base_url=self.api_base)
 
     async def call_llm(self, prompt: str) -> str:
