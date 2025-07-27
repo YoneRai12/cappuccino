@@ -22,5 +22,6 @@ class Settings:
     openweather_api_key: str = os.getenv("OPENWEATHER_API_KEY", "")
     discord_bot_token: str = os.getenv("DISCORD_BOT_TOKEN", "")
     discord_token: str = os.getenv("DISCORD_TOKEN", "")
+    local_model_path: str = os.getenv("LOCAL_MODEL_PATH", "")
 
 settings = Settings()

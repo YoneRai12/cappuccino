@@ -23,7 +23,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env` ファイル内に API キーやトークンを入力します。
+`.env` ファイル内に API キーやトークンを入力します。`LOCAL_MODEL_PATH` を指定すると OpenAI を使わずローカルモデルが利用されます。
 
 - `OPENAI_API_KEY`: OpenAI API を利用する際のキー
 - `LOCAL_MODEL_PATH`: ローカル LLM モデルのディレクトリ (任意)
