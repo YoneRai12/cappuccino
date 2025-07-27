@@ -8,7 +8,8 @@ import json
 VOICEVOX_URL = "http://localhost:50021"
 
 load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
+from config import settings
+TOKEN = settings.discord_token
 
 intents = discord.Intents.default()
 intents.message_content = True
