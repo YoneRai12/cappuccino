@@ -10,30 +10,33 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Uplo
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import os
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
 import requests
 from PIL import Image
+from config import settings
+from local_llm import LocalLLM
+
+try:
+    from openai import AsyncOpenAI
+except Exception:
+    AsyncOpenAI = None
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
 # OpenAI設定（Llama 3.1-latest用）
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+OPENAI_API_KEY = settings.openai_api_key
+OPENAI_API_BASE = settings.openai_api_base or "https://api.openai.com/v1"
 
 # Stable Diffusion設定
-STABLE_DIFFUSION_URL = os.getenv("STABLE_DIFFUSION_URL", "http://localhost:7860")
-STABLE_DIFFUSION_API_KEY = os.getenv("STABLE_DIFFUSION_API_KEY", "")
+STABLE_DIFFUSION_URL = settings.stable_diffusion_url
+STABLE_DIFFUSION_API_KEY = settings.stable_diffusion_api_key
 
-# OpenAIクライアント（Llama 3.1-latest用）
-openai_client = AsyncOpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url=OPENAI_API_BASE
-)
+# LLMクライアント（OpenAI またはローカル）
+if settings.local_model_path:
+    openai_client = LocalLLM(settings.local_model_path)
+else:
+    openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE)
 
 app = FastAPI(title="Llama 3.1-latest + Stable Diffusion API", version="1.0.0")
 
@@ -82,13 +85,17 @@ class ChatResponse(BaseModel):
 async def call_llama(prompt: str, model: str = "llama-3.1-latest", temperature: float = 0.8, max_tokens: int = 2048) -> Dict[str, Any]:
     """Llama 3.1-latestを呼び出す"""
     try:
+        if isinstance(openai_client, LocalLLM):
+            text = await openai_client.chat(prompt, max_new_tokens=max_tokens)
+            return {"response": text, "model": model, "usage": None}
+
         response = await openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
             max_tokens=max_tokens
         )
-        
+
         return {
             "response": response.choices[0].message.content,
             "model": model,
@@ -270,6 +277,11 @@ async def chat_stream(websocket: WebSocket):
             message = data.get("message", "")
             model = data.get("model", "llama-3.1-latest")
             
+            if isinstance(openai_client, LocalLLM):
+                text = await openai_client.chat(message)
+                await websocket.send_text(text)
+                continue
+
             async for chunk in openai_client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": message}],
@@ -303,6 +315,9 @@ async def health_check() -> Dict[str, Any]:
 async def list_models() -> Dict[str, Any]:
     """利用可能なモデル一覧"""
     try:
+        if isinstance(openai_client, LocalLLM):
+            raise RuntimeError("local model")
+
         models = await openai_client.models.list()
         return {
             "llm_models": [model.id for model in models.data],

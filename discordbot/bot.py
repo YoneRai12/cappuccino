@@ -22,9 +22,14 @@ from cappuccino_agent import CappuccinoAgent
 import json
 import feedparser
 import aiohttp
-from openai import AsyncOpenAI
 from bs4 import BeautifulSoup
 from typing import Iterable, Union, Optional, Tuple
+from local_llm import LocalLLM
+
+try:
+    from openai import AsyncOpenAI
+except Exception:
+    AsyncOpenAI = None
 
 from config import settings
 from urllib.parse import urlparse, parse_qs, urlunparse
@@ -32,10 +37,48 @@ from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 from dataclasses import dataclass
 from typing import Any
-import pycountry
+
+try:
+    import pycountry
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    pycountry = None
+    logging.warning(
+        "pycountry is not installed. Install it with 'pip install pycountry'"
+    )
 # from googletrans import Translator, LANGUAGES  # ←不要なので削除
 import openai
 import requests
+
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+def parse_seek_time(text: str) -> int:
+    """Convert seek time expressions like ``"1m30s"`` or ``"1:02:03"`` to seconds."""
+
+    text = text.strip()
+    if not text:
+        raise ValueError("empty time string")
+
+    match = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", text)
+    if match and any(match.groups()):
+        h = int(match.group(1) or 0)
+        m = int(match.group(2) or 0)
+        s = int(match.group(3) or 0)
+        return h * 3600 + m * 60 + s
+
+    if re.fullmatch(r"\d+:\d{2}(?::\d{2})?", text):
+        parts = list(map(int, text.split(":")))
+        if len(parts) == 2:
+            m, s = parts
+            return m * 60 + s
+        if len(parts) == 3:
+            h, m, s = parts
+            return h * 3600 + m * 60 + s
+
+    if text.isdigit():
+        return int(text)
+
+    raise ValueError(f"invalid seek time: {text}")
 
 # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 # ★★★ これが最重要の修正点です ★★★
@@ -351,7 +394,10 @@ WEATHER_CHANNEL_ID = _load_weather_channel()
 # ───────────────── エージェントの初期化 ─────────────────
 # api_baseがNoneの場合はデフォルト値を使用
 api_base = OPENAI_API_BASE if OPENAI_API_BASE else "https://api.openai.com/v1"
-cappuccino_agent = CappuccinoAgent(api_key=OPENAI_API_KEY, api_base=api_base)
+if settings.local_model_path:
+    cappuccino_agent = CappuccinoAgent()
+else:
+    cappuccino_agent = CappuccinoAgent(api_key=OPENAI_API_KEY, api_base=api_base)
 # ───────────────── ロギング設定 ─────────────────
 log_file_path = os.path.join(ROOT_DIR, "..", "bot.log")
 handler = RotatingFileHandler(log_file_path, maxBytes=1_000_000, backupCount=5, encoding='utf-8')
@@ -696,7 +742,7 @@ async def on_ready():
 
 async def start_bot():
     # Discord Botのトークンを環境変数から取得
-    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    TOKEN = settings.discord_bot_token
     if not TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN環境変数が設定されていません")
     await bot.start(TOKEN)
@@ -1331,7 +1377,7 @@ async def get_weather_data(city: str = "Tokyo") -> dict:
     """天気情報を取得"""
     try:
         # OpenWeatherMap APIを使用（無料版）
-        api_key = os.getenv("OPENWEATHER_API_KEY", "")
+        api_key = settings.openweather_api_key
         if not api_key:
             return {"error": "OpenWeatherMap APIキーが設定されていません"}
         
@@ -2836,6 +2882,8 @@ async def skip_command(interaction: discord.Interaction):
     await interaction.response.send_message("⏭️ 曲をスキップしました。", ephemeral=True)
 
 def get_country_name(country_code):
+    if pycountry is None:
+        return None
     try:
         country = pycountry.countries.get(alpha_2=country_code.upper())
         return country.name if country else None

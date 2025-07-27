@@ -12,6 +12,7 @@ qrcode
 python-barcode[images]
 treys
 feedparser
+pycountry
 matplotlib
 typing_extensions>=4.9
 fastapi
@@ -24,3 +25,5 @@ aio_pika
 textblob
 httpx<0.28
 uvicorn
+transformers
+torch
