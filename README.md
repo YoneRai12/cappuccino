@@ -14,9 +14,11 @@ Cappuccino aims to be a general‑purpose AI assistant. The project follows the 
    source .venv/bin/activate
    ```
 3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+pip install -r requirements.txt
+```
+If you pull new changes and encounter "No module named pycountry", run the above
+command again to install any new dependencies.
 4. Copy `.env.example` to `.env` and set the tokens. Leave `OPENAI_API_KEY` empty and set `LOCAL_MODEL_PATH` to your LLaMA model directory if you want to run without OpenAI.
 
 For Japanese setup instructions see [docs/SETUP_JA.md](docs/SETUP_JA.md).

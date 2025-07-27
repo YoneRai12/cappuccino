@@ -24,6 +24,10 @@ Windows 環境の場合は `Scripts\activate` を実行してください。
 pip install -r requirements.txt
 ```
 
+依存パッケージが不足していると言われた場合は、最新の `requirements.txt` を再度
+実行してインストールしてください。特に `pycountry` などの追加パッケージをインス
+トールし忘れると、Bot 起動時にモジュールが見つからないエラーになります。
+
 ## 3. `.env` の作成と編集
 
 ```bash
