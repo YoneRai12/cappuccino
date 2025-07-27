@@ -1,6 +1,13 @@
 # セットアップ手順 (日本語)
 
-このドキュメントでは Cappuccino をローカル環境で起動するまでの基本的な流れを説明します。
+このドキュメントでは Cappuccino をダウンロードしてから起動するまでの手順を説明します。
+
+## 0. リポジトリの取得
+
+```bash
+git clone <repo-url>
+cd cappuccino
+```
 
 ## 1. Python 仮想環境の作成
 
@@ -23,7 +30,8 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env` ファイル内に API キーやトークンを入力します。`LOCAL_MODEL_PATH` を指定すると OpenAI を使わずローカルモデルが利用されます。
+`.env` ファイル内に API キーやトークンを入力します。
+`OPENAI_API_KEY` を空欄のままにした場合、`LOCAL_MODEL_PATH` に指定した LLaMA などのローカルモデルが使われます。
 
 - `OPENAI_API_KEY`: OpenAI API を利用する際のキー
 - `LOCAL_MODEL_PATH`: ローカル LLM モデルのディレクトリ (任意)
