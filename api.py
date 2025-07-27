@@ -10,24 +10,22 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Uplo
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import os
-from dotenv import load_dotenv
 from openai import AsyncOpenAI
 import requests
 from PIL import Image
+from config import settings
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
 # OpenAI設定（Llama 3.1-latest用）
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+OPENAI_API_KEY = settings.openai_api_key
+OPENAI_API_BASE = settings.openai_api_base or "https://api.openai.com/v1"
 
 # Stable Diffusion設定
-STABLE_DIFFUSION_URL = os.getenv("STABLE_DIFFUSION_URL", "http://localhost:7860")
-STABLE_DIFFUSION_API_KEY = os.getenv("STABLE_DIFFUSION_API_KEY", "")
+STABLE_DIFFUSION_URL = settings.stable_diffusion_url
+STABLE_DIFFUSION_API_KEY = settings.stable_diffusion_api_key
 
 # OpenAIクライアント（Llama 3.1-latest用）
 openai_client = AsyncOpenAI(

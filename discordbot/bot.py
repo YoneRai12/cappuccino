@@ -727,7 +727,7 @@ async def on_ready():
 
 async def start_bot():
     # Discord Botのトークンを環境変数から取得
-    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    TOKEN = settings.discord_bot_token
     if not TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN環境変数が設定されていません")
     await bot.start(TOKEN)
@@ -1362,7 +1362,7 @@ async def get_weather_data(city: str = "Tokyo") -> dict:
     """天気情報を取得"""
     try:
         # OpenWeatherMap APIを使用（無料版）
-        api_key = os.getenv("OPENWEATHER_API_KEY", "")
+        api_key = settings.openweather_api_key
         if not api_key:
             return {"error": "OpenWeatherMap APIキーが設定されていません"}
         

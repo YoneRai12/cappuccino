@@ -7,9 +7,10 @@ from typing import Dict, List
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from PIL import Image
+from config import settings
 
 load_dotenv()
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+client = AsyncOpenAI(api_key=settings.openai_api_key)
 
 
 async def call_openai(prompt: str) -> Dict[str, List[str]]:
