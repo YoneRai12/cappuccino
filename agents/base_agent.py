@@ -1,19 +1,30 @@
 # agents/base_agent.py (Web検索を禁止する最終完成版)
 import logging
-import os
-from openai import AsyncOpenAI
 from typing import List, Dict, Optional
+
+from config import settings
+from local_llm import LocalLLM
+
+try:
+    from openai import AsyncOpenAI
+except Exception:
+    AsyncOpenAI = None
 
 class BaseAgent:
     def __init__(self, api_key: Optional[str], api_base: Optional[str], model: str, system_prompt: str):
-        from config import settings
         self.api_key = api_key or settings.openai_api_key
         self.api_base = api_base or (settings.openai_api_base or "")
         self.model = model
         self.system_prompt = system_prompt
-        
+
         logging.info(f"エージェント初期化中... Model: {self.model}, Role: '{self.system_prompt[:30]}...'")
-        self.llm_client = AsyncOpenAI(api_key=self.api_key, base_url=self.api_base)
+
+        if settings.local_model_path:
+            self.llm_client = LocalLLM(settings.local_model_path)
+        else:
+            if AsyncOpenAI is None:
+                raise RuntimeError("OpenAI client unavailable and LOCAL_MODEL_PATH not set")
+            self.llm_client = AsyncOpenAI(api_key=self.api_key, base_url=self.api_base)
 
     async def call_llm(self, prompt: str) -> str:
         messages = [
@@ -23,12 +34,16 @@ class BaseAgent:
         
         try:
             logging.info(f"LLM呼び出し中... Model: {self.model}")
-            
+
+            if isinstance(self.llm_client, LocalLLM):
+                content = await self.llm_client.chat(prompt)
+                return content.strip()
+
             response = await self.llm_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0.0, # 創造性をゼロにし、指示に絶対服従させる
-                tool_choice="none" # ★ GrokやOllamaに「ツールを使うな」と厳命する
+                temperature=0.0,
+                tool_choice="none"
             )
 
             content = response.choices[0].message.content

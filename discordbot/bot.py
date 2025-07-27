@@ -22,9 +22,14 @@ from cappuccino_agent import CappuccinoAgent
 import json
 import feedparser
 import aiohttp
-from openai import AsyncOpenAI
 from bs4 import BeautifulSoup
 from typing import Iterable, Union, Optional, Tuple
+from local_llm import LocalLLM
+
+try:
+    from openai import AsyncOpenAI
+except Exception:
+    AsyncOpenAI = None
 
 from config import settings
 from urllib.parse import urlparse, parse_qs, urlunparse
@@ -382,7 +387,10 @@ WEATHER_CHANNEL_ID = _load_weather_channel()
 # ───────────────── エージェントの初期化 ─────────────────
 # api_baseがNoneの場合はデフォルト値を使用
 api_base = OPENAI_API_BASE if OPENAI_API_BASE else "https://api.openai.com/v1"
-cappuccino_agent = CappuccinoAgent(api_key=OPENAI_API_KEY, api_base=api_base)
+if settings.local_model_path:
+    cappuccino_agent = CappuccinoAgent()
+else:
+    cappuccino_agent = CappuccinoAgent(api_key=OPENAI_API_KEY, api_base=api_base)
 # ───────────────── ロギング設定 ─────────────────
 log_file_path = os.path.join(ROOT_DIR, "..", "bot.log")
 handler = RotatingFileHandler(log_file_path, maxBytes=1_000_000, backupCount=5, encoding='utf-8')

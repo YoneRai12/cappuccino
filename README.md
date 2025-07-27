@@ -8,7 +8,7 @@ Cappuccino aims to be a general‑purpose AI assistant. The project follows the 
    ```bash
    pip install -r requirements.txt
    ```
-3. Copy `.env.example` to `.env` and add your API keys.
+3. Copy `.env.example` to `.env` and add your API keys. To run without OpenAI set `LOCAL_MODEL_PATH` to your model directory.
 
 For Japanese setup instructions see [docs/SETUP_JA.md](docs/SETUP_JA.md).
 
