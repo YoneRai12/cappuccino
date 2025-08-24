@@ -2,7 +2,19 @@
 
 import logging
 import asyncio
+from functools import wraps
 from typing import Any, Dict, List
+
+
+def log_tool(func):
+    """ツール関数の実行をログ出力するデコレータ."""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        logging.info("Tool '%s' called", func.__name__)
+        return await func(*args, **kwargs)
+
+    return wrapper
+
 try:
     from image_generator import generate_image  # 画像生成関数を実装済みのモジュールからimport
 except ImportError:

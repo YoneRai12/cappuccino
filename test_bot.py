@@ -3,15 +3,6 @@ import asyncio
 import discord
 from discord.ext import commands
 
-# 環境変数からトークンを取得
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-
-if not TOKEN:
-    print("❌ DISCORD_BOT_TOKEN環境変数が設定されていません")
-    print("以下のコマンドで設定してください：")
-    print('$env:DISCORD_BOT_TOKEN="your_bot_token_here"')
-    exit(1)
-
 # Botの設定
 intents = discord.Intents.default()
 intents.message_content = True
@@ -53,8 +44,15 @@ async def leave_command(ctx):
         await ctx.send("❌ VCに接続していません")
 
 async def main():
+    token = os.getenv("DISCORD_BOT_TOKEN")
+    if not token:
+        print("❌ DISCORD_BOT_TOKEN環境変数が設定されていません")
+        print("以下のコマンドで設定してください：")
+        print('$env:DISCORD_BOT_TOKEN="your_bot_token_here"')
+        raise SystemExit(1)
+
     print("Discord Botを起動中...")
-    await bot.start(TOKEN)
+    await bot.start(token)
 
 if __name__ == "__main__":
     # Windowsでasyncioのイベントループポリシーを設定
