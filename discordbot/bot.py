@@ -76,6 +76,37 @@ except ImportError:
     VOICEVOX_AVAILABLE = False
     print("requests not available. VOICEVOX functionality will be disabled.")
 
+
+def parse_seek_time(text: str) -> int:
+    """時間表記を秒数に変換するユーティリティ."""
+    text = text.strip()
+    if not text:
+        raise ValueError("empty")
+
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) == 2:
+            m, s = parts
+            if not (m.isdigit() and s.isdigit()):
+                raise ValueError("invalid")
+            return int(m) * 60 + int(s)
+        if len(parts) == 3:
+            h, m, s = parts
+            if not (h.isdigit() and m.isdigit() and s.isdigit()):
+                raise ValueError("invalid")
+            return int(h) * 3600 + int(m) * 60 + int(s)
+        raise ValueError("invalid")
+
+    match = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", text)
+    if match and any(match.groups()):
+        h, m, s = match.groups()
+        return int(h or 0) * 3600 + int(m or 0) * 60 + int(s or 0)
+
+    if text.isdigit():
+        return int(text)
+
+    raise ValueError("invalid")
+
 # (これ以降のコードは、前回提案した最終版と全く同じでOKです)
 # ───────────────── TOKEN / KEY ─────────────────
 OPENAI_API_KEY = settings.openai_api_key
