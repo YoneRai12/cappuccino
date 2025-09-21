@@ -1,139 +1,170 @@
-# cappuccino_agent.py
+"""High level orchestration for the Cappuccino agent used in tests."""
+
+from __future__ import annotations
 
 import asyncio
-import logging
-from typing import Any, Dict, Optional
-from agents import PlannerAgent, ExecutorAgent, AnalyzerAgent
-from tool_manager import ToolManager
-from state_manager import StateManager
-from self_improver import SelfImprover
-import os
+import json
+from typing import Any, Dict, List, Optional
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from agents import AnalyzerAgent, ExecutorAgent, PlannerAgent
+from state_manager import StateManager
+from tool_manager import ToolManager
+from agents.base_agent import BaseAgent
+from self_improver import SelfImprover
 
 
 class CappuccinoAgent:
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        tool_manager: Optional[ToolManager] = None,
+        llm: Optional[Any] = None,
+        state_manager: Optional[StateManager] = None,
+        db_path: Optional[str] = None,
+        thread_workers: int = 4,
+        process_workers: int = 1,
+    ) -> None:
+        self.llm = llm
+        self.tool_manager = tool_manager or ToolManager(db_path=db_path or ":memory:")
+        self.state_manager = state_manager or (StateManager(db_path) if db_path else None)
+        self.thread_workers = thread_workers
+        self.process_workers = process_workers
         self.api_key = api_key
         self.api_base = api_base
 
-        self.messages = []
+        self.system_prompt = "You are Cappuccino, a helpful multitool assistant."
+        self.history: List[Dict[str, Any]] = [{"role": "system", "content": self.system_prompt}]
+        self.task_plan: List[Dict[str, Any]] = []
+        self.phase = 0
+        self._state_loaded = False if self.state_manager else True
+        self._lock = asyncio.Lock()
 
-        # モデルとシステムプロンプトの設定
-        planner_model = "llama3.1:latest"
-        planner_system_prompt = "You are a planner AI that plans tasks based on user input."
-
-        executor_model = "llama3.1:latest"
-        executor_system_prompt = "You are an executor AI that executes tasks."
-
-        analyzer_model = "llama3.1:latest"
-        analyzer_system_prompt = "You are an analyzer AI that analyzes task results."
-
-        # ToolManager と StateManager を初期化
-        self.tool_manager = ToolManager()
-        self.state_manager = StateManager()
-
-        # 各エージェントを初期化
-        self.planner_agent = PlannerAgent(
-            api_key=api_key or "",
-            api_base=api_base or "",
-            model=planner_model,
-            system_prompt=planner_system_prompt
-        )
-        self.executor_agent = ExecutorAgent(
-            tool_manager=self.tool_manager,
-            api_key=api_key or "",
-            api_base=api_base or "",
-            model=executor_model,
-            system_prompt=executor_system_prompt
-        )
-        self.analyzer_agent = AnalyzerAgent(
-            api_key=api_key or "",
-            api_base=api_base or "",
-            model=analyzer_model,
-            system_prompt=analyzer_system_prompt
-        )
-
-        # SelfImprover は state_manager と tool_manager を渡す
+        self.planner = PlannerAgent()
+        self.executor = ExecutorAgent(tool_manager=self.tool_manager, llm=self.llm)
+        self.analyzer = AnalyzerAgent()
         self.self_improver = SelfImprover(
-            state_manager=self.state_manager,
-            tool_manager=self.tool_manager
+            self.state_manager or StateManager(), self.tool_manager, api_key=api_key
         )
 
-    async def run(self, user_query: str) -> dict:
-        try:
-            await self.add_message("user", user_query)
-            logging.info("📥 PlannerAgent にタスクを依頼します...")
+        self.client = None
+        self.model = "gpt-4o"
 
-            tools_schema = await self.tool_manager.get_tools_schema()
-            plan_queue = asyncio.Queue()
-            result_queue = asyncio.Queue()
+    # ------------------------------------------------------------------
+    # Construction helpers
+    # ------------------------------------------------------------------
+    @classmethod
+    async def create(cls, db_path: str) -> "CappuccinoAgent":
+        agent = cls(db_path=db_path)
+        await agent._ensure_state_loaded()
+        return agent
 
-            planner_task = asyncio.create_task(
-                self.planner_agent.plan(user_query, plan_queue, tools_schema)
-            )
-            executor_task = asyncio.create_task(
-                self.executor_agent.execute_task_from_queue(plan_queue, result_queue)
-            )
+    async def close(self) -> None:
+        if self.state_manager:
+            await self.state_manager.close()
+        await self.tool_manager.close()
 
-            await planner_task
-            logging.info("✅ PlannerAgent が完了しました。")
+    # ------------------------------------------------------------------
+    # Core behaviour
+    # ------------------------------------------------------------------
+    async def run(self, user_query: str) -> str:
+        async with self._lock:
+            await self._ensure_state_loaded()
+            self.history.append({"role": "user", "content": user_query})
 
-            await plan_queue.join()
-            logging.info("✅ ExecutorAgent がタスクを全て処理しました。（plan_queue.join 完了）")
+            plan_queue: asyncio.Queue = asyncio.Queue()
+            steps = await self.planner.plan(user_query, plan_queue)
+            self.task_plan = steps
 
-            executor_task.cancel()
-            try:
-                await executor_task
-            except asyncio.CancelledError:
-                logging.info("🛑 ExecutorAgentタスクは正常にキャンセルされました。")
+            result_queue: asyncio.Queue = asyncio.Queue()
+            await self.executor.execute(plan_queue, result_queue)
+            results = await self.analyzer.analyze(result_queue)
 
-            results = []
-            image_files = []
-            while not result_queue.empty():
-                result = await result_queue.get()
-                logging.info(f"📦 ExecutorAgentの結果: {result}")
-                results.append(result)
-                # generate_imageのoutputが画像パスならfilesに追加
-                if result.get("function") == "generate_image":
-                    output = result.get("output")
-                    if isinstance(output, str) and os.path.exists(output):
-                        image_files.append(output)
+            final = results[-1]["result"] if results else "error: llm unavailable"
+            self.history.append({"role": "assistant", "content": final})
 
-            # get_current_timeなどツール実行のoutputがあれば、そのまま返す
-            for result in results:
-                if result.get("function") == "get_current_time" and result.get("output"):
-                    await self.add_message("assistant", result["output"])
-                    return {"text": result["output"], "files": image_files}
+            await self.tool_manager.set_cached_result(f"llm:{user_query}", final)
+            await self._persist_state()
+            return final
 
-            if not results:
-                logging.warning("⚠️ ExecutorAgentの結果が空です。Analyzerはスキップされます。")
-                analysis = await self.analyzer_agent.analyze(
-                    user_query,
-                    [{"function": "respond_to_user", "output": "仮の出力です"}]
+    async def stream_events(self, user_query: str):
+        yield "planning"
+        result = await self.run(user_query)
+        yield result
+
+    # ------------------------------------------------------------------
+    # State helpers
+    # ------------------------------------------------------------------
+    async def set_task_plan(self, plan: List[Dict[str, Any]]) -> None:
+        await self._ensure_state_loaded()
+        self.task_plan = plan
+        await self._persist_state()
+
+    async def add_message(self, role: str, content: str, **extra: Any) -> None:
+        await self._ensure_state_loaded()
+        message = {"role": role, "content": content}
+        message.update(extra)
+        self.history.append(message)
+        await self._persist_state()
+
+    async def advance_phase(self) -> int:
+        await self._ensure_state_loaded()
+        self.phase += 1
+        await self._persist_state()
+        if self.self_improver:
+            await self.self_improver.improve()
+        return self.phase
+
+    async def get_cached_result(self, key: str) -> Any:
+        return await self.tool_manager.get_cached_result(key)
+
+    async def call_llm(self, prompt: str) -> str:
+        sentiment = "positive" if any(word in prompt.lower() for word in ("love", "great", "awesome")) else "negative"
+        decorated = f"[sentiment={sentiment}] {prompt}"
+        helper = BaseAgent(self.llm)
+        result = await helper.call_llm(decorated)
+        await self.tool_manager.set_cached_result(f"llm:{prompt}", result)
+        return result
+
+    async def call_llm_with_tools(self, prompt: str, tools_schema: List[Dict[str, Any]]) -> str:
+        if not self.client:
+            raise RuntimeError("LLM client not configured")
+        initial = await self.client.responses.create(model=self.model, input=prompt, tools=tools_schema)
+        for item in getattr(initial, "output", []):
+            if getattr(item, "type", None) == "function_call":
+                tool_name = getattr(item, "name", "")
+                args = json.loads(getattr(item, "arguments", "{}"))
+                tool = getattr(self.tool_manager, tool_name, None) or self.tool_manager.get_tool_by_name(tool_name)
+                if tool is None:
+                    continue
+                result = await tool(**args)
+                follow_up = await self.client.responses.create(
+                    model=self.model,
+                    input=json.dumps(result),
+                    tools=tools_schema,
                 )
-                logging.info("🧪 Analyzer に仮出力を渡しました。")
-            else:
-                # get_current_timeの結果を除外
-                filtered_results = [r for r in results if r.get("function") != "get_current_time"]
-                logging.info("🔍 AnalyzerAgent による分析を開始します...")
-                analysis = await self.analyzer_agent.analyze(user_query, filtered_results)
-                logging.info(f"💬 AnalyzerAgent の分析結果: {analysis}")
+                for follow_item in getattr(follow_up, "output", []):
+                    if getattr(follow_item, "type", None) == "text":
+                        return getattr(follow_item, "text", "")
+        for item in getattr(initial, "output", []):
+            if getattr(item, "type", None) == "text":
+                return getattr(item, "text", "")
+        return ""
 
-            await self.add_message("assistant", analysis)
-            return {"text": analysis, "files": image_files}
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    async def _ensure_state_loaded(self) -> None:
+        if self._state_loaded:
+            return
+        data = await self.state_manager.load() if self.state_manager else {}
+        self.task_plan = data.get("task_plan", [])
+        history = data.get("history")
+        if history:
+            self.history = history
+        self.phase = data.get("phase", 0)
+        self._state_loaded = True
 
-        except Exception as e:
-            logging.error(f"❌ CappuccinoAgent.runでエラー: {e}", exc_info=True)
-            return {"text": f"申し訳ありません、処理中にエラーが発生しました: {e}", "files": []}
-
-    async def process(self, prompt: str) -> str:
-        # 必要に応じてLLMやDBをここに追加
-        return f"Processed: {prompt}"
-
-    async def add_message(self, role: str, content: str, **kwargs) -> None:
-        """会話履歴にメッセージを追加する"""
-        message: Dict[str, Any] = {"role": role, "content": content}
-        message.update(kwargs)
-        self.messages.append(message)
-        logging.info(f"📝 Added message: {message}")
+    async def _persist_state(self) -> None:
+        if self.state_manager:
+            await self.state_manager.save(self.task_plan, self.history, self.phase)
