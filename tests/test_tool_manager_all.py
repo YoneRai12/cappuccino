@@ -31,6 +31,19 @@ async def test_agent_management(tm):
 
 
 @pytest.mark.asyncio
+async def test_agent_schedule_without_existing_row(tm):
+    sched = await tm.agent_schedule_task("fresh", "weekly")
+    assert sched["schedule"] == "weekly"
+    conn = await tm._get_db_connection()
+    async with conn.execute(
+        "SELECT schedule, status, phase FROM agent_tasks WHERE agent_id=?",
+        ("fresh",),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row == ("weekly", "pending", 0)
+
+
+@pytest.mark.asyncio
 async def test_message_functions(tm):
     note = await tm.message_notify_user("u", "hi")
     assert note["message"] == "hi"

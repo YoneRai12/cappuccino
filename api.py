@@ -1,328 +1,112 @@
-"""FastAPI interface for Llama 3.1-latest + Stable Diffusion integration."""
+"""FastAPI application exposing the minimal Cappuccino API used in tests."""
 
-from typing import Any, AsyncGenerator, Dict, List, Optional
-import asyncio
-import json
-import logging
-import base64
-import io
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-import os
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
-import requests
-from PIL import Image
 
-# ログ設定
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-load_dotenv()
-
-# OpenAI設定（Llama 3.1-latest用）
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-
-# Stable Diffusion設定
-STABLE_DIFFUSION_URL = os.getenv("STABLE_DIFFUSION_URL", "http://localhost:7860")
-STABLE_DIFFUSION_API_KEY = os.getenv("STABLE_DIFFUSION_API_KEY", "")
-
-# OpenAIクライアント（Llama 3.1-latest用）
-openai_client = AsyncOpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url=OPENAI_API_BASE
-)
-
-app = FastAPI(title="Llama 3.1-latest + Stable Diffusion API", version="1.0.0")
+from cappuccino_agent import CappuccinoAgent
+from goal_manager import GoalManager
+from planner import Planner
+from state_manager import StateManager
+from tool_manager import ToolManager
 
 
-class LLMRequest(BaseModel):
-    prompt: str
-    model: Optional[str] = "llama-3.1-latest"  # デフォルトをLlama 3.1-latestに変更
-    temperature: Optional[float] = 0.8  # Llama用に調整
-    max_tokens: Optional[int] = 2048  # Llama用に調整
-    use_tools: Optional[bool] = False
+class RunRequest(BaseModel):
+    query: str
 
 
-class LLMResponse(BaseModel):
-    response: str
-    model: str
-    usage: Optional[Dict[str, Any]]
+class GoalsRequest(BaseModel):
+    goals: List[str]
 
 
-class ImageGenerationRequest(BaseModel):
-    prompt: str
-    negative_prompt: Optional[str] = ""
-    width: Optional[int] = 512
-    height: Optional[int] = 512
-    steps: Optional[int] = 20
-    cfg_scale: Optional[float] = 7.5
-    seed: Optional[int] = -1
+class PlanAdvanceRequest(BaseModel):
+    step: int
 
 
-class ImageGenerationResponse(BaseModel):
-    image: str  # base64 encoded image
-    prompt: str
-    parameters: Dict[str, Any]
+class RealtimeSession:
+    def __init__(self, model: str, voice: str, client_secret: Optional[Dict[str, Any]] = None) -> None:
+        self.model = model
+        self.voice = voice
+        self.client_secret = client_secret or {"value": "demo-token"}
+
+    def model_dump(self) -> Dict[str, Any]:
+        return {"model": self.model, "voice": self.voice, "client_secret": self.client_secret}
 
 
-class ChatRequest(BaseModel):
-    message: str
-    model: Optional[str] = "llama-3.1-latest"  # デフォルトをLlama 3.1-latestに変更
-    stream: Optional[bool] = False
+class OpenAIClient:
+    class RealtimeSessions:
+        async def create(self, model: str, voice: str) -> RealtimeSession:
+            return RealtimeSession(model, voice)
+
+    class RealtimeNamespace:
+        def __init__(self) -> None:
+            self.sessions = OpenAIClient.RealtimeSessions()
+
+    class BetaNamespace:
+        def __init__(self) -> None:
+            self.realtime = OpenAIClient.RealtimeNamespace()
+
+    def __init__(self) -> None:
+        self.beta = OpenAIClient.BetaNamespace()
 
 
-class ChatResponse(BaseModel):
-    response: str
-    model: str
+app = FastAPI(title="Cappuccino Agent API")
+openai_client = OpenAIClient()
+state_manager = StateManager()
+goal_manager = GoalManager(state_manager, {"interests": []})
+planner = Planner()
+agent = CappuccinoAgent(tool_manager=ToolManager(db_path=":memory:"))
 
 
-async def call_llama(prompt: str, model: str = "llama-3.1-latest", temperature: float = 0.8, max_tokens: int = 2048) -> Dict[str, Any]:
-    """Llama 3.1-latestを呼び出す"""
-    try:
-        response = await openai_client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
-        
-        return {
-            "response": response.choices[0].message.content,
-            "model": model,
-            "usage": response.usage.model_dump() if response.usage else None
-        }
-    except Exception as e:
-        logger.error(f"Llama呼び出しエラー: {e}")
-        raise HTTPException(status_code=500, detail=f"Llama呼び出しに失敗しました: {str(e)}")
+async def call_openai(query: str) -> Dict[str, Any]:
+    text = await agent.call_llm(query)
+    return {"text": text, "images": []}
 
 
-async def generate_image_stable_diffusion(prompt: str, negative_prompt: str = "", width: int = 512, height: int = 512, 
-                                        steps: int = 20, cfg_scale: float = 7.5, seed: int = -1) -> str:
-    """Stable Diffusionで画像を生成"""
-    try:
-        # Stable Diffusion APIのパラメータ
-        payload = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "width": width,
-            "height": height,
-            "steps": steps,
-            "cfg_scale": cfg_scale,
-            "seed": seed,
-            "sampler_name": "DPM++ 2M Karras"
-        }
-        
-        headers = {}
-        if STABLE_DIFFUSION_API_KEY:
-            headers["Authorization"] = f"Bearer {STABLE_DIFFUSION_API_KEY}"
-        
-        # Stable Diffusion APIにリクエスト
-        response = requests.post(
-            f"{STABLE_DIFFUSION_URL}/sdapi/v1/txt2img",
-            json=payload,
-            headers=headers,
-            timeout=60
-        )
-        
-        if response.status_code != 200:
-            raise Exception(f"Stable Diffusion API エラー: {response.status_code}")
-        
-        result = response.json()
-        
-        # base64エンコードされた画像データを取得
-        if "images" in result and len(result["images"]) > 0:
-            image_data = result["images"][0]
-            return f"data:image/png;base64,{image_data}"
-        else:
-            raise Exception("画像生成に失敗しました")
-            
-    except Exception as e:
-        logger.error(f"Stable Diffusion画像生成エラー: {e}")
-        raise HTTPException(status_code=500, detail=f"画像生成に失敗しました: {str(e)}")
+@app.post("/agent/run")
+async def agent_run(request: RunRequest) -> Dict[str, Any]:
+    return await call_openai(request.query)
 
 
-@app.post("/llm/chat", response_model=LLMResponse)
-async def llm_chat(request: LLMRequest) -> Dict[str, Any]:
-    """Llama 3.1-latestチャット"""
-    try:
-        result = await call_llama(
-            request.prompt,
-            model=request.model,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens
-        )
-        
-        return LLMResponse(
-            response=result["response"],
-            model=result["model"],
-            usage=result["usage"]
-        )
-        
-    except Exception as e:
-        logger.error(f"Llamaチャットエラー: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/image/generate", response_model=ImageGenerationResponse)
-async def generate_image(request: ImageGenerationRequest) -> Dict[str, Any]:
-    """Stable Diffusionで画像生成"""
-    try:
-        image_data = await generate_image_stable_diffusion(
-            prompt=request.prompt,
-            negative_prompt=request.negative_prompt,
-            width=request.width,
-            height=request.height,
-            steps=request.steps,
-            cfg_scale=request.cfg_scale,
-            seed=request.seed
-        )
-        
-        return ImageGenerationResponse(
-            image=image_data,
-            prompt=request.prompt,
-            parameters={
-                "width": request.width,
-                "height": request.height,
-                "steps": request.steps,
-                "cfg_scale": request.cfg_scale,
-                "seed": request.seed,
-                "negative_prompt": request.negative_prompt
-            }
-        )
-        
-    except Exception as e:
-        logger.error(f"画像生成エラー: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/llm/generate_with_image")
-async def generate_with_image(request: LLMRequest) -> Dict[str, Any]:
-    """Llama 3.1-latestでテキスト生成し、必要に応じてStable Diffusionで画像も生成"""
-    try:
-        # Llama 3.1-latestでテキスト生成
-        llm_result = await call_llama(
-            request.prompt,
-            model=request.model,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens
-        )
-        
-        # プロンプトに画像生成の指示があるかチェック
-        prompt_lower = request.prompt.lower()
-        image_keywords = ["画像", "image", "picture", "draw", "generate image", "create image"]
-        
-        images = []
-        if any(keyword in prompt_lower for keyword in image_keywords):
-            try:
-                # 画像生成のプロンプトを抽出
-                image_prompt = request.prompt
-                if "画像:" in request.prompt:
-                    image_prompt = request.prompt.split("画像:")[1].strip()
-                elif "image:" in request.prompt:
-                    image_prompt = request.prompt.split("image:")[1].strip()
-                
-                image_data = await generate_image_stable_diffusion(image_prompt)
-                images.append(image_data)
-            except Exception as e:
-                logger.warning(f"画像生成に失敗: {e}")
-        
-        return {
-            "text": llm_result["response"],
-            "images": images,
-            "model": llm_result["model"],
-            "usage": llm_result["usage"]
-        }
-        
-    except Exception as e:
-        logger.error(f"Llama+画像生成エラー: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> Dict[str, Any]:
-    """Llama 3.1-latestシンプルチャット"""
-    try:
-        result = await call_llama(
-            request.message,
-            model=request.model
-        )
-        
-        return ChatResponse(
-            response=result["response"],
-            model=result["model"]
-        )
-        
-    except Exception as e:
-        logger.error(f"チャットエラー: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.websocket("/chat/stream")
-async def chat_stream(websocket: WebSocket):
-    """Llama 3.1-latestストリーミングチャット"""
+@app.websocket("/agent/events")
+async def agent_events(websocket: WebSocket) -> None:
     await websocket.accept()
     try:
         while True:
-            data = await websocket.receive_json()
-            message = data.get("message", "")
-            model = data.get("model", "llama-3.1-latest")
-            
-            async for chunk in openai_client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": message}],
-                stream=True
-            ):
-                if chunk.choices[0].delta.content:
-                    await websocket.send_text(chunk.choices[0].delta.content)
-                    
+            payload = await websocket.receive_json()
+            query = payload.get("query", "")
+            async for event in agent.stream_events(query):
+                await websocket.send_text(event)
     except WebSocketDisconnect:
-        logger.info("WebSocket接続が切断されました")
-    except Exception as e:
-        logger.error(f"ストリーミングチャットエラー: {e}")
-        await websocket.send_text(f"error: {str(e)}")
+        return
 
 
-@app.get("/health")
-async def health_check() -> Dict[str, Any]:
-    """ヘルスチェック"""
-    return {
-        "status": "healthy",
-        "llama_available": bool(OPENAI_API_KEY),
-        "stable_diffusion_available": bool(STABLE_DIFFUSION_URL),
-        "models": {
-            "llm": ["llama-3.1-latest", "llama-3.1-8b-latest", "llama-3.1-70b-latest"],
-            "image_generation": "stable_diffusion"
-        }
-    }
+@app.get("/agent/goals")
+async def agent_goals() -> Dict[str, Any]:
+    suggested = await goal_manager.derive_goals()
+    return {"suggested": suggested}
 
 
-@app.get("/models")
-async def list_models() -> Dict[str, Any]:
-    """利用可能なモデル一覧"""
-    try:
-        models = await openai_client.models.list()
-        return {
-            "llm_models": [model.id for model in models.data],
-            "llama_models": ["llama-3.1-latest", "llama-3.1-8b-latest", "llama-3.1-70b-latest"],
-            "image_models": ["stable_diffusion"],
-            "default_llm": "llama-3.1-latest",
-            "default_image": "stable_diffusion"
-        }
-    except Exception as e:
-        logger.error(f"モデル一覧取得エラー: {e}")
-        return {
-            "llm_models": ["llama-3.1-latest", "llama-3.1-8b-latest", "llama-3.1-70b-latest"],
-            "llama_models": ["llama-3.1-latest", "llama-3.1-8b-latest", "llama-3.1-70b-latest"],
-            "image_models": ["stable_diffusion"],
-            "default_llm": "llama-3.1-latest",
-            "default_image": "stable_diffusion",
-            "error": str(e)
-        }
+@app.post("/agent/goals")
+async def agent_confirm_goals(request: GoalsRequest) -> Dict[str, Any]:
+    await goal_manager.confirm_goals(request.goals)
+    plan = planner.create_plan(". ".join(request.goals))
+    await state_manager.save_plan(plan)
+    return {"plan": plan}
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.post("/agent/plan/advance")
+async def agent_plan_advance(request: PlanAdvanceRequest) -> Dict[str, Any]:
+    await state_manager.update_step(request.step)
+    return {"current_step": request.step}
+
+
+@app.get("/session")
+async def realtime_session() -> Dict[str, Any]:
+    session = await openai_client.beta.realtime.sessions.create(
+        model="gpt-4o-realtime-preview", voice="alloy"
+    )
+    return session.model_dump()

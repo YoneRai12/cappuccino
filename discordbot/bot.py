@@ -50,6 +50,84 @@ from image_generator import generate_image, generate_image_with_negative
 is_generating_image = False
 image_generating_channel_id = None
 
+EEW_BASE_URL = os.environ.get("EEW_BASE_URL", "https://www.jma.go.jp/bosai/quake/data/")
+
+
+async def _send_eew(channel: "discord.abc.Messageable", item: dict) -> None:
+    detail_path = item.get("json")
+    if not detail_path:
+        return
+
+    url = detail_path if detail_path.startswith("http") else f"{EEW_BASE_URL}{detail_path}"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                try:
+                    detail = await response.json(content_type=None)
+                except TypeError:  # pragma: no cover - compatibility with mocked response
+                    detail = await response.json()
+    except Exception:  # pragma: no cover - network failures
+        return
+
+    head = detail.get("Head", {})
+    body = detail.get("Body", {})
+    observation = body.get("Intensity", {}).get("Observation", {})
+    hypocenter = body.get("Earthquake", {}).get("Hypocenter", {})
+
+    ctt = item.get("ctt")
+    iso_timestamp = head.get("TargetDateTime")
+    timestamp: datetime.datetime | None = None
+    if ctt:
+        try:
+            parsed = datetime.datetime.strptime(ctt, "%Y%m%d%H%M%S")
+            timestamp = parsed.replace(tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
+        except ValueError:
+            timestamp = None
+    if timestamp is None and iso_timestamp:
+        normalised = iso_timestamp.replace("Z", "+00:00")
+        try:
+            timestamp = datetime.datetime.fromisoformat(normalised)
+        except ValueError:
+            timestamp = None
+    if timestamp is None:
+        timestamp = datetime.datetime.now(datetime.timezone.utc)
+    formatted_time = timestamp.astimezone(
+        datetime.timezone(datetime.timedelta(hours=9))
+    ).strftime("%Y年%m月%d日(%a)%H:%M:%S")
+
+    area_name = hypocenter.get("Area", {}).get("Name")
+    magnitude = body.get("Earthquake", {}).get("Magnitude")
+    max_intensity = observation.get("MaxInt")
+
+    colour_map = {
+        "5+": discord.Colour.orange(),
+        "5-": discord.Colour.gold(),
+        "6-": discord.Colour.red(),
+        "6+": discord.Colour.red(),
+        "7": discord.Colour.red(),
+        "4": discord.Colour.gold(),
+        "3": discord.Colour.green(),
+        "2": discord.Colour.light_grey(),
+        "1": discord.Colour.light_grey(),
+        "0": discord.Colour.light_grey(),
+    }
+    colour = colour_map.get(max_intensity, discord.Colour.light_grey())
+
+    embed = discord.Embed(title=head.get("Title", "緊急地震速報"), colour=colour)
+    embed.add_field(name="発表時刻", value=formatted_time, inline=False)
+    if area_name:
+        embed.add_field(name="震源地", value=area_name, inline=True)
+    if magnitude:
+        embed.add_field(name="マグニチュード", value=magnitude, inline=True)
+    if max_intensity:
+        embed.add_field(name="最大震度", value=max_intensity, inline=True)
+
+    if item.get("ctt"):
+        embed.set_image(url=f"{EEW_BASE_URL}{item['ctt']}.png")
+
+    await channel.send(embed=embed)
+
 # 音声読み上げ機能のライブラリ
 try:
     from gtts import gTTS
